@@ -1,8 +1,9 @@
 """
-Data fetching and caching for the Swiss Banking Systemic Risk Dashboard.
+Data fetching and caching for the Systemic Risk Dashboard.
 
-Sources price data from Yahoo Finance via yfinance for Swiss banks and
-the Swiss Market Index (SMI). Balance sheet data is used for SRISK.
+Covers Swiss (CH), US, and UK banking institutions.
+Prices sourced from Yahoo Finance via yfinance.
+Market benchmark: S&P 500 (^GSPC) — used as global proxy for cross-country comparison.
 """
 
 import os
@@ -20,58 +21,117 @@ warnings.filterwarnings("ignore")
 CACHE_DIR = "cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-SWISS_BANKS: dict[str, str] = {
-    "UBSG.SW": "UBS Group",
-    "CSGN.SW": "Credit Suisse",   # Historical until June 2023
-    "BAER.SW": "Julius Bär",
-    "SLHN.SW": "Swiss Life",
-    "VONN.SW": "Vontobel",
-    "EFGN.SW": "EFG International",
-    "BCVN.SW": "BCV",
-    "ZURN.SW": "Zurich Insurance",
+BANKS_BY_COUNTRY: dict[str, dict[str, str]] = {
+    "CH": {
+        "UBSG.SW": "UBS Group",
+        "CSGN.SW": "Credit Suisse",   # Historical until June 2023
+        "BAER.SW": "Julius Bär",
+        "SLHN.SW": "Swiss Life",
+        "VONN.SW": "Vontobel",
+        "EFGN.SW": "EFG International",
+        "BCVN.SW": "BCV",
+        "ZURN.SW": "Zurich Insurance",
+    },
+    "US": {
+        "JPM": "JPMorgan Chase",
+        "BAC": "Bank of America",
+        "GS":  "Goldman Sachs",
+        "WFC": "Wells Fargo",
+        "C":   "Citigroup",
+        "MS":  "Morgan Stanley",
+    },
+    "UK": {
+        "HSBA.L": "HSBC",
+        "BARC.L": "Barclays",
+        "LLOY.L": "Lloyds Banking Group",
+        "NWG.L":  "NatWest Group",
+        "STAN.L": "Standard Chartered",
+    },
+}
+
+COUNTRY_LABELS: dict[str, str] = {
+    "CH": "Switzerland",
+    "US": "United States",
+    "UK": "United Kingdom",
+}
+
+# Flat lookup: ticker → display name
+ALL_BANKS: dict[str, str] = {
+    ticker: name
+    for banks in BANKS_BY_COUNTRY.values()
+    for ticker, name in banks.items()
+}
+
+# Reverse lookup: ticker → country code
+BANK_COUNTRY: dict[str, str] = {
+    ticker: country
+    for country, banks in BANKS_BY_COUNTRY.items()
+    for ticker in banks
 }
 
 BANK_COLORS: dict[str, str] = {
-    "UBSG.SW": "#1f77b4",
-    "CSGN.SW": "#d62728",
-    "BAER.SW": "#2ca02c",
-    "SLHN.SW": "#ff7f0e",
-    "VONN.SW": "#9467bd",
-    "EFGN.SW": "#8c564b",
-    "BCVN.SW": "#e377c2",
-    "ZURN.SW": "#17becf",
+    # Switzerland — blues / greens / earth tones
+    "UBSG.SW": "#1565c0",
+    "CSGN.SW": "#b71c1c",
+    "BAER.SW": "#2e7d32",
+    "SLHN.SW": "#e65100",
+    "VONN.SW": "#6a1b9a",
+    "EFGN.SW": "#4e342e",
+    "BCVN.SW": "#ad1457",
+    "ZURN.SW": "#00695c",
+    # United States — bold primary tones
+    "JPM":     "#0d47a1",
+    "BAC":     "#c62828",
+    "GS":      "#37474f",
+    "WFC":     "#f57f17",
+    "C":       "#00838f",
+    "MS":      "#33691e",
+    # United Kingdom — purples / distinct blues
+    "HSBA.L":  "#d32f2f",
+    "BARC.L":  "#0277bd",
+    "LLOY.L":  "#558b2f",
+    "NWG.L":   "#7b1fa2",
+    "STAN.L":  "#0097a7",
 }
 
-MARKET_TICKER = "^SSMI"
-MARKET_NAME = "SMI"
-DEFAULT_START = "2010-01-01"
+# Primary market benchmark (S&P 500 used as global proxy)
+MARKET_TICKER = "^GSPC"
+MARKET_NAME   = "S&P 500"
 
-# Cache expiry (hours for prices, days for balance sheet)
+# Additional indices downloaded for the Market Data tab
+EXTRA_INDICES: dict[str, str] = {
+    "^SSMI": "SMI (CH)",
+    "^FTSE": "FTSE 100 (UK)",
+}
+
+DEFAULT_START = "2010-01-01"
 PRICE_CACHE_HOURS = 12
-BS_CACHE_DAYS = 7
+BS_CACHE_DAYS     = 7
 
 
 # ── Prices ─────────────────────────────────────────────────────────────────────
 
 def _download_prices(start: str, end: str) -> pd.DataFrame:
-    tickers = list(SWISS_BANKS.keys()) + [MARKET_TICKER]
-    print(f"  Downloading prices {start} → {end} ...")
+    all_tickers = list(ALL_BANKS.keys()) + [MARKET_TICKER] + list(EXTRA_INDICES.keys())
+    print(f"  Downloading prices {start} → {end} for {len(ALL_BANKS)} banks ...")
     raw = yf.download(
-        tickers, start=start, end=end,
+        all_tickers, start=start, end=end,
         auto_adjust=True, progress=False, threads=True,
     )
     if raw.empty:
         raise RuntimeError("yfinance returned no data")
 
     prices = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
-    prices = prices.rename(columns={MARKET_TICKER: MARKET_NAME})
-    prices = prices.dropna(axis=1, how="all")
 
-    # Forward-fill up to 5 days (handles weekends / public holidays)
+    # Rename index tickers to friendly names
+    rename = {MARKET_TICKER: MARKET_NAME}
+    rename.update(EXTRA_INDICES)
+    prices = prices.rename(columns=rename)
+    prices = prices.dropna(axis=1, how="all")
     prices = prices.ffill(limit=5)
 
-    actual = [c for c in prices.columns if c != MARKET_NAME]
-    print(f"  Got {len(prices)} rows, {len(actual)} banks + market")
+    bank_cols = [c for c in prices.columns if c in ALL_BANKS]
+    print(f"  Got {len(prices)} rows, {len(bank_cols)}/{len(ALL_BANKS)} banks")
     return prices
 
 
@@ -97,7 +157,7 @@ def get_prices(
 
 
 def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
-    """Simple daily percentage returns, dropping the first NaN row."""
+    """Simple daily percentage returns."""
     return prices.pct_change().iloc[1:]
 
 
@@ -105,27 +165,22 @@ def compute_returns(prices: pd.DataFrame) -> pd.DataFrame:
 
 def _fetch_balance_sheet_one(ticker: str, name: str) -> dict:
     try:
-        t = yf.Ticker(ticker)
+        t    = yf.Ticker(ticker)
         info = t.info or {}
-        bs = t.quarterly_balance_sheet
+        bs   = t.quarterly_balance_sheet
 
         total_liabilities = None
         if bs is not None and not bs.empty:
-            # Try direct liability key first
-            for key in [
-                "Total Liabilities Net Minority Interest",
-                "Total Liab",
-                "Total Liabilities",
-            ]:
+            for key in ["Total Liabilities Net Minority Interest",
+                        "Total Liab", "Total Liabilities"]:
                 if key in bs.index:
                     val = bs.loc[key].dropna()
                     if not val.empty:
                         total_liabilities = float(val.iloc[0])
                         break
 
-            # Fallback: assets − equity
             if total_liabilities is None:
-                assets, equity = None, None
+                assets = equity = None
                 if "Total Assets" in bs.index:
                     v = bs.loc["Total Assets"].dropna()
                     if not v.empty:
@@ -141,20 +196,19 @@ def _fetch_balance_sheet_one(ticker: str, name: str) -> dict:
                     total_liabilities = assets - equity
 
         return {
-            "name": name,
-            "total_liabilities": total_liabilities,
+            "name":               name,
+            "country":            BANK_COUNTRY.get(ticker, ""),
+            "total_liabilities":  total_liabilities,
             "shares_outstanding": info.get("sharesOutstanding"),
-            "market_cap": info.get("marketCap"),
-            "currency": info.get("currency", "CHF"),
+            "market_cap":         info.get("marketCap"),
+            "currency":           info.get("currency", ""),
         }
     except Exception as exc:
         print(f"    Warning – {name}: {exc}")
         return {
-            "name": name,
-            "total_liabilities": None,
-            "shares_outstanding": None,
-            "market_cap": None,
-            "currency": "CHF",
+            "name": name, "country": BANK_COUNTRY.get(ticker, ""),
+            "total_liabilities": None, "shares_outstanding": None,
+            "market_cap": None, "currency": "",
         }
 
 
@@ -170,7 +224,7 @@ def get_balance_sheet(force_refresh: bool = False) -> dict:
 
     print("  Fetching balance sheet data ...")
     data = {}
-    for ticker, name in SWISS_BANKS.items():
+    for ticker, name in ALL_BANKS.items():
         print(f"    {name} ({ticker})")
         data[ticker] = _fetch_balance_sheet_one(ticker, name)
 
@@ -179,7 +233,7 @@ def get_balance_sheet(force_refresh: bool = False) -> dict:
     return data
 
 
-# ── Market-cap time series (used for rolling SRISK) ───────────────────────────
+# ── Market-cap time series (for rolling SRISK) ────────────────────────────────
 
 def build_market_cap_series(
     prices: pd.DataFrame,
@@ -187,11 +241,10 @@ def build_market_cap_series(
 ) -> pd.DataFrame:
     """
     Approximate daily market cap = price × shares_outstanding.
-    Uses constant shares outstanding from the most recent yfinance info,
-    which is a standard simplification for rolling SRISK.
+    Constant shares outstanding is a standard simplification.
     """
     caps = {}
-    for ticker in SWISS_BANKS:
+    for ticker in ALL_BANKS:
         if ticker not in prices.columns:
             continue
         shares = balance_sheet.get(ticker, {}).get("shares_outstanding")

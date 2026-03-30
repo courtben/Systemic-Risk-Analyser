@@ -198,15 +198,16 @@ def compute_all(
             print(f"  Loaded measures from cache ({age_h:.1f}h old)")
             return {k: pd.read_parquet(p) for k, p in cache_paths.items()}
 
-    from data import SWISS_BANKS
+    from data import ALL_BANKS, MARKET_NAME
 
-    mkt_ret = returns[returns.columns.intersection(["SMI", "Market"])].iloc[:, 0]
-    bank_cols = [c for c in returns.columns if c in SWISS_BANKS]
+    mkt_ret = returns[MARKET_NAME] if MARKET_NAME in returns.columns else \
+              returns[returns.columns.intersection(["SMI", "S&P 500", "Market"])].iloc[:, 0]
+    bank_cols = [c for c in returns.columns if c in ALL_BANKS]
 
     mes_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}
 
     for ticker in bank_cols:
-        name = SWISS_BANKS.get(ticker, ticker)
+        name = ALL_BANKS.get(ticker, ticker)
         print(f"  {name} ({ticker}) ...")
 
         bank_ret = returns[ticker].dropna()
