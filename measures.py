@@ -1,5 +1,5 @@
 """
-Systemic risk measures for Swiss banking institutions.
+Systemic risk measures for CH / US / UK banking institutions.
 
 Implements the three canonical market-based measures:
   - MES   : Marginal Expected Shortfall (Acharya et al. 2017)
@@ -9,6 +9,7 @@ Implements the three canonical market-based measures:
 Methodology follows TimoDimi/SystemicRisk (CoVaR/MES joint model)
 adapted to a rolling-window OLS/quantile-regression framework.
 """
+from __future__ import annotations
 
 import os
 import warnings
@@ -18,7 +19,7 @@ from statsmodels.regression.quantile_regression import QuantReg
 
 warnings.filterwarnings("ignore")
 
-CACHE_DIR = "cache"
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 

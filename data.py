@@ -5,6 +5,7 @@ Covers Swiss (CH), US, and UK banking institutions.
 Prices sourced from Yahoo Finance via yfinance.
 Market benchmark: S&P 500 (^GSPC) — used as global proxy for cross-country comparison.
 """
+from __future__ import annotations
 
 import os
 import json
@@ -18,7 +19,9 @@ warnings.filterwarnings("ignore")
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-CACHE_DIR = "cache"
+# Use an absolute path so the cache works regardless of the working directory
+# (cloud runners often set cwd to something other than the project root).
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 BANKS_BY_COUNTRY: dict[str, dict[str, str]] = {
@@ -112,7 +115,7 @@ def _download_prices(start: str, end: str) -> pd.DataFrame:
     print(f"  Downloading prices {start} → {end} for {len(ALL_BANKS)} banks ...")
     raw = yf.download(
         all_tickers, start=start, end=end,
-        auto_adjust=True, progress=False, threads=True,
+        auto_adjust=True, progress=False,
     )
     if raw.empty:
         raise RuntimeError("yfinance returned no data")

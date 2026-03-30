@@ -99,11 +99,6 @@ def _fmt_pct(x) -> str:
     return "N/A" if pd.isna(x) else f"{x * 100:.2f}%"
 
 
-def _country_label(ticker: str) -> str:
-    c = BANK_COUNTRY.get(ticker, "")
-    return f"{COUNTRY_FLAGS.get(c, '')} {COUNTRY_LABELS.get(c, c)}"
-
-
 # ── Chart builders ────────────────────────────────────────────────────────────
 
 def _base_layout(**kwargs) -> dict:
@@ -349,6 +344,9 @@ app = dash.Dash(
     suppress_callback_exceptions=True,
     title="Systemic Risk Dashboard",
 )
+# Expose the Flask WSGI server — required by gunicorn on Plotly Cloud:
+#   gunicorn app:server
+server = app.server
 
 DATE_MIN       = RETURNS.index.min().date()
 DATE_MAX       = RETURNS.index.max().date()
@@ -395,7 +393,7 @@ controls = dbc.Container([
                 display_format="YYYY-MM-DD",
                 style={"fontSize": "0.85rem"},
             ),
-        ], xs=12, md=4, className="mb-2"),
+        ], xs=12, md=5, className="mb-2"),
 
         # Country filter
         dbc.Col([
@@ -415,23 +413,7 @@ controls = dbc.Container([
                 labelStyle={"marginRight": "18px", "fontSize": "0.88rem",
                             "cursor": "pointer"},
             ),
-        ], xs=12, md=4, className="mb-2"),
-
-        # Significance level
-        dbc.Col([
-            html.Label("Tail probability α", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
-            dcc.Dropdown(
-                id="alpha-select",
-                options=[
-                    {"label": "1%",  "value": 0.01},
-                    {"label": "5%",  "value": 0.05},
-                    {"label": "10%", "value": 0.10},
-                ],
-                value=0.05, clearable=False,
-                style={"fontSize": "0.85rem"},
-            ),
-        ], xs=12, md=2, className="mb-2"),
+        ], xs=12, md=5, className="mb-2"),
 
         # Select / deselect all
         dbc.Col([
@@ -819,4 +801,4 @@ def update_market(start, end, tickers, _):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=False, host="127.0.0.1", port=8050)
+    app.run(debug=False)
