@@ -401,18 +401,19 @@ controls = dbc.Container([
         dbc.Col([
             html.Label("Country", className="text-muted mb-1",
                        style={"fontSize": "0.78rem", "fontWeight": "600"}),
-            dbc.Checklist(
+            dcc.Checklist(
                 id="country-select",
                 options=[
-                    {"label": "🇨🇭 Switzerland", "value": "CH"},
-                    {"label": "🇺🇸 United States", "value": "US"},
-                    {"label": "🇬🇧 United Kingdom", "value": "UK"},
+                    {"label": "  🇨🇭 Switzerland", "value": "CH"},
+                    {"label": "  🇺🇸 United States", "value": "US"},
+                    {"label": "  🇬🇧 United Kingdom", "value": "UK"},
                 ],
                 value=["CH"],
                 inline=True,
                 className="mt-1",
-                inputStyle={"marginRight": "4px"},
-                labelStyle={"marginRight": "16px", "fontSize": "0.88rem"},
+                inputStyle={"marginRight": "4px", "cursor": "pointer"},
+                labelStyle={"marginRight": "18px", "fontSize": "0.88rem",
+                            "cursor": "pointer"},
             ),
         ], xs=12, md=4, className="mb-2"),
 
@@ -608,13 +609,9 @@ def update_bank_options(countries, _all, _none, current_values):
     for country in (countries or []):
         flag  = COUNTRY_FLAGS.get(country, "")
         label = COUNTRY_LABELS.get(country, country)
-        # Group header (disabled)
+        # Group header (disabled separator — plain string label required)
         options.append({
-            "label": html.Span(
-                f"── {flag} {label} ──",
-                style={"color": TEXT_MUTED, "fontSize": "0.8rem",
-                       "fontStyle": "italic", "fontWeight": "600"},
-            ),
+            "label": f"── {flag} {label} ──",
             "value": f"__header_{country}__",
             "disabled": True,
         })

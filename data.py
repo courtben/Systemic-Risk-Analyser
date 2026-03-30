@@ -26,11 +26,9 @@ BANKS_BY_COUNTRY: dict[str, dict[str, str]] = {
         "UBSG.SW": "UBS Group",
         "CSGN.SW": "Credit Suisse",   # Historical until June 2023
         "BAER.SW": "Julius Bär",
-        "SLHN.SW": "Swiss Life",
         "VONN.SW": "Vontobel",
         "EFGN.SW": "EFG International",
         "BCVN.SW": "BCV",
-        "ZURN.SW": "Zurich Insurance",
     },
     "US": {
         "JPM": "JPMorgan Chase",
@@ -74,11 +72,9 @@ BANK_COLORS: dict[str, str] = {
     "UBSG.SW": "#1565c0",
     "CSGN.SW": "#b71c1c",
     "BAER.SW": "#2e7d32",
-    "SLHN.SW": "#e65100",
     "VONN.SW": "#6a1b9a",
     "EFGN.SW": "#4e342e",
     "BCVN.SW": "#ad1457",
-    "ZURN.SW": "#00695c",
     # United States — bold primary tones
     "JPM":     "#0d47a1",
     "BAC":     "#c62828",
