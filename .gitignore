@@ -1,0 +1,10 @@
+# cached data (rebuilt automatically on first run)
+cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+.venv
+venv/
