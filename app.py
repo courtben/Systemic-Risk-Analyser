@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import os
 from plotly.subplots import make_subplots
 
 import dash
@@ -28,8 +29,8 @@ print("=" * 60)
 print("Systemic Risk Dashboard  —  CH / US / UK Banks")
 print("=" * 60)
 
-import data as D
-import measures as M
+import data_load as D
+import systemic_measures as M
 
 print("\n[1/4] Fetching price data ...")
 PRICES = D.get_prices()
@@ -42,6 +43,7 @@ BS = D.get_balance_sheet()
 
 print("\n[4/4] Computing systemic risk measures ...")
 MC_TS    = D.build_market_cap_series(PRICES, BS)
+# Returns dict with keys: 'mes', 'ses', 'covar', 'delta_covar', 'srisk'
 MEASURES = M.compute_all(RETURNS, MC_TS, BS)
 
 LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
@@ -361,8 +363,8 @@ header = dbc.Navbar(
                     className="mb-0",
                     style={"color": TEXT_MAIN, "fontWeight": "700", "fontSize": "1.05rem"}),
             html.Small(
-                "MES · ΔCoVaR · SRISK  |  "
-                "Acharya et al. (2017) · Adrian & Brunnermeier (2016) · Brownlees & Engle (2017)",
+                "MES · SES · ΔCoVaR · SRISK  |  "
+                "Acharya et al. (2010/2017) · Adrian & Brunnermeier (2016) · Brownlees & Engle (2017)",
                 className="text-muted",
             ),
         ]),
@@ -441,6 +443,32 @@ controls = dbc.Container([
             ),
         ], xs=12),
     ], className="mt-1"),
+
+    # Critical value slider (third row)
+    dbc.Row([
+        dbc.Col([
+            html.Label(
+                id="alpha-label",
+                children="Critical Value α = 5.0%  (worst 5% of market days)",
+                className="text-muted mb-1",
+                style={"fontSize": "0.78rem", "fontWeight": "600"},
+            ),
+            dcc.Slider(
+                id="alpha-slider",
+                min=1, max=10, step=0.5,
+                value=5,
+                marks={i: f"{i}%" for i in range(1, 11)},
+                tooltip={"placement": "bottom", "always_visible": False},
+                className="mb-0",
+            ),
+            html.Small(
+                "Changing α recomputes MES, SES & SRISK interactively. "
+                "ΔCoVaR uses the cached α=5% value (quantile regression is too slow to rerun on-the-fly).",
+                className="text-muted",
+                style={"fontSize": "0.74rem"},
+            ),
+        ], xs=12, md=8, className="mb-2"),
+    ], className="mt-2"),
 ], fluid=True, className="py-2 px-3",
    style={"backgroundColor": "#f8f9fa",
           "borderBottom": f"1px solid {BORDER}"})
@@ -455,13 +483,15 @@ _card = {"backgroundColor": BG_CARD,
 
 overview_layout = dbc.Container([
     dbc.Row([
-        dbc.Col(id="kpi-mes",   xs=12, md=4, className="mb-3"),
-        dbc.Col(id="kpi-covar", xs=12, md=4, className="mb-3"),
-        dbc.Col(id="kpi-srisk", xs=12, md=4, className="mb-3"),
+        dbc.Col(id="kpi-mes",   xs=12, md=3, className="mb-3"),
+        dbc.Col(id="kpi-ses",   xs=12, md=3, className="mb-3"),
+        dbc.Col(id="kpi-covar", xs=12, md=3, className="mb-3"),
+        dbc.Col(id="kpi-srisk", xs=12, md=3, className="mb-3"),
     ], className="mt-3"),
     dbc.Row([
-        dbc.Col(dcc.Graph(id="chart-mes-rank"),   xs=12, md=6, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-covar-rank"), xs=12, md=6, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-mes-rank"),   xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-ses-rank"),   xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-covar-rank"), xs=12, md=4, className="mb-3"),
     ]),
     dbc.Row([
         dbc.Col([
@@ -481,9 +511,10 @@ timeseries_layout = dbc.Container([
             dcc.Dropdown(
                 id="ts-measure",
                 options=[
-                    {"label": "MES — Marginal Expected Shortfall",  "value": "mes"},
-                    {"label": "ΔCoVaR — Conditional VaR contribution", "value": "delta_covar"},
-                    {"label": "CoVaR (level)",                        "value": "covar"},
+                    {"label": "MES — Marginal Expected Shortfall",       "value": "mes"},
+                    {"label": "SES — Systemic Expected Shortfall",        "value": "ses"},
+                    {"label": "ΔCoVaR — Conditional VaR contribution",   "value": "delta_covar"},
+                    {"label": "CoVaR (level)",                            "value": "covar"},
                 ],
                 value="mes", clearable=False,
                 style={"fontSize": "0.85rem"},
@@ -505,12 +536,18 @@ timeseries_layout = dbc.Container([
             html.Div([
                 html.P([
                     html.B("MES"), " — expected fractional loss of the bank when the "
-                    f"market ({MARKET_NAME}) falls below its α-th percentile threshold. "
-                    "Higher MES = greater contribution to tail risk.",
+                    f"market ({MARKET_NAME}) falls below its α-th percentile (set above). "
+                    "Higher MES = greater tail sensitivity.",
+                    html.Br(),
+                    html.B("SES"), " = MES × (D/W) — leverage-scaled MES (Acharya et al. 2010). "
+                    "D = total liabilities, W = market cap.  Captures both tail sensitivity and "
+                    "capital structure fragility.  Values > 100% possible for highly leveraged banks.",
                     html.Br(),
                     html.B("ΔCoVaR"), " — market's VaR when the bank is in stress minus "
-                    "its VaR when the bank is at its median state (Adrian & Brunnermeier 2016). "
-                    "More negative ΔCoVaR = larger systemic footprint.",
+                    "its VaR at its median state (Adrian & Brunnermeier 2016). "
+                    "More negative ΔCoVaR = larger systemic footprint. ",
+                    html.Span("Uses cached α = 5%; not recomputed when slider changes.",
+                              style={"fontStyle": "italic"}),
                 ], className="mb-0 text-muted", style={"fontSize": "0.82rem"}),
             ], style=_card),
         ], xs=12, className="mb-3"),
@@ -557,14 +594,20 @@ app.layout = html.Div([
     header,
     controls,
     dcc.Store(id="refresh-store", data=0),
-    dbc.Tabs([
-        dbc.Tab(overview_layout,   label="Overview",    tab_id="tab-overview"),
-        dbc.Tab(timeseries_layout, label="Time Series", tab_id="tab-ts"),
-        dbc.Tab(srisk_layout,      label="SRISK",       tab_id="tab-srisk"),
-        dbc.Tab(market_layout,     label="Market Data", tab_id="tab-market"),
-    ], id="main-tabs", active_tab="tab-overview",
-       style={"paddingLeft": "1rem", "backgroundColor": "#f8f9fa",
-              "borderBottom": f"1px solid {BORDER}"}),
+    dcc.Store(id="alpha-store",   data=0.05),
+    dcc.Loading(
+        id="loading-main",
+        type="circle",
+        color="#1565c0",
+        children=dbc.Tabs([
+            dbc.Tab(overview_layout,   label="Overview",    tab_id="tab-overview"),
+            dbc.Tab(timeseries_layout, label="Time Series", tab_id="tab-ts"),
+            dbc.Tab(srisk_layout,      label="SRISK",       tab_id="tab-srisk"),
+            dbc.Tab(market_layout,     label="Market Data", tab_id="tab-market"),
+        ], id="main-tabs", active_tab="tab-overview",
+           style={"paddingLeft": "1rem", "backgroundColor": "#f8f9fa",
+                  "borderBottom": f"1px solid {BORDER}"}),
+    ),
 ], style={"backgroundColor": BG_PAGE, "minHeight": "100vh"})
 
 
@@ -636,69 +679,103 @@ def refresh_data(n_clicks, current):
     return (current or 0) + 1
 
 
+# ── Alpha recompute ────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("alpha-store", "data"),
+    Output("alpha-label", "children"),
+    Input("alpha-slider", "value"),
+    prevent_initial_call=True,
+)
+def update_alpha(alpha_pct):
+    """Recompute MES, SES, SRISK for new alpha. ΔCoVaR keeps cached value."""
+    global MEASURES
+    alpha = alpha_pct / 100.0
+    print(f"\n[α] Recomputing MES/SES/SRISK for α={alpha:.3f} ...")
+    new = M.recompute_for_alpha(RETURNS, MC_TS, BS, alpha=alpha)
+    MEASURES = {**MEASURES, **new}   # preserve covar / delta_covar from cache
+    print("[α] Done.")
+    return alpha, f"Critical Value α = {alpha_pct:.1f}%  (worst {alpha_pct:.1f}% of market days)"
+
+
 # ── Overview tab ──────────────────────────────────────────────────────────────
 
 @app.callback(
     Output("kpi-mes",          "children"),
+    Output("kpi-ses",          "children"),
     Output("kpi-covar",        "children"),
     Output("kpi-srisk",        "children"),
     Output("chart-mes-rank",   "figure"),
+    Output("chart-ses-rank",   "figure"),
     Output("chart-covar-rank", "figure"),
     Output("risk-table",       "children"),
     Input("date-range",    "start_date"),
     Input("date-range",    "end_date"),
     Input("bank-select",   "value"),
     Input("refresh-store", "data"),
+    Input("alpha-store",   "data"),
 )
-def update_overview(start, end, tickers, _):
+def update_overview(start, end, tickers, _refresh, _alpha):
     tickers = tickers or []
     mes_df    = _slice(MEASURES["mes"],         start, end, tickers)
+    ses_df    = _slice(MEASURES["ses"],         start, end, tickers)
     dcovar_df = _slice(MEASURES["delta_covar"], start, end, tickers)
     srisk_df  = _slice(MEASURES["srisk"],       start, end, tickers)
 
     latest_mes   = _latest_row(mes_df)
+    latest_ses   = _latest_row(ses_df)
     latest_covar = _latest_row(dcovar_df)
     latest_srisk = _latest_row(srisk_df)
 
     agg_mes   = latest_mes.mean()
+    agg_ses   = latest_ses.mean()
     agg_covar = latest_covar.mean()
     agg_srisk = latest_srisk.sum()
 
-    kpi1 = kpi_card("Avg. MES (latest)",
-                    _fmt_pct(agg_mes),
-                    "Mean expected loss on market crash days",
-                    "#c62828")
-    kpi2 = kpi_card("Avg. |DeltaCoVaR| (latest)",
-                    _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
-                    "Mean marginal systemic contribution",
-                    "#e65100")
-    kpi3 = kpi_card("Total SRISK (latest, native ccy)",
-                    _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
-                    "Aggregate capital shortfall estimate",
-                    "#2e7d32")
+    kpi_mes  = kpi_card("Avg. MES (latest)",
+                        _fmt_pct(agg_mes),
+                        "Mean expected loss on market crash days",
+                        "#c62828")
+    kpi_ses  = kpi_card("Avg. SES (latest)",
+                        _fmt_pct(agg_ses),
+                        "Leverage-scaled MES (Acharya et al. 2010)",
+                        "#6a1b9a")
+    kpi_cov  = kpi_card("Avg. |ΔCoVaR| (latest)",
+                        _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
+                        "Mean marginal systemic contribution",
+                        "#e65100")
+    kpi_srisk = kpi_card("Total SRISK (latest, native ccy)",
+                         _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
+                         "Aggregate capital shortfall estimate",
+                         "#2e7d32")
 
-    fig_mes   = ranking_bar(latest_mes,        "MES Ranking (latest)",     "MES")
-    fig_covar = ranking_bar(latest_covar.abs(), "|DeltaCoVaR| Ranking (latest)", "|DeltaCoVaR|")
+    fig_mes   = ranking_bar(latest_mes,         "MES Ranking (latest)",         "MES")
+    fig_ses   = ranking_bar(latest_ses,         "SES Ranking (latest)",         "SES (leverage-scaled)")
+    fig_covar = ranking_bar(latest_covar.abs(), "|ΔCoVaR| Ranking (latest)",   "|ΔCoVaR|")
 
     # Summary table
+    all_tickers = sorted(
+        set(latest_mes.index) | set(latest_ses.index) | set(latest_covar.index)
+    )
     rows = []
-    for t in sorted(set(latest_mes.index) | set(latest_covar.index)):
+    for t in all_tickers:
         rows.append(html.Tr([
             html.Td(html.Span("●", style={"color": _color(t)})),
             html.Td(COUNTRY_FLAGS.get(BANK_COUNTRY.get(t, ""), "")),
             html.Td(_name(t), style={"fontWeight": "500"}),
             html.Td(t, className="text-muted", style={"fontSize": "0.8rem"}),
-            html.Td(_fmt_pct(latest_mes.get(t, float("nan")))),
+            html.Td(_fmt_pct(latest_mes.get(t,   float("nan")))),
+            html.Td(_fmt_pct(latest_ses.get(t,   float("nan")))),
             html.Td(_fmt_pct(latest_covar.get(t, float("nan")))),
-            html.Td(_fmt_bn(latest_srisk.get(t, float("nan")))),
+            html.Td(_fmt_bn(latest_srisk.get(t,  float("nan")))),
         ]))
 
     table = dbc.Table(
         [
             html.Thead(html.Tr([
                 html.Th(""), html.Th(""), html.Th("Bank"),
-                html.Th("Ticker"), html.Th("MES"),
-                html.Th("DeltaCoVaR"), html.Th("SRISK"),
+                html.Th("Ticker"), html.Th("MES"), html.Th("SES"),
+                html.Th("ΔCoVaR"), html.Th("SRISK"),
             ]), style={"backgroundColor": "#f8f9fa"}),
             html.Tbody(rows),
         ],
@@ -706,7 +783,7 @@ def update_overview(start, end, tickers, _):
         style={"fontSize": "0.85rem", "backgroundColor": BG_CARD},
     )
 
-    return kpi1, kpi2, kpi3, fig_mes, fig_covar, table
+    return kpi_mes, kpi_ses, kpi_cov, kpi_srisk, fig_mes, fig_ses, fig_covar, table
 
 
 # ── Time series tab ───────────────────────────────────────────────────────────
@@ -719,15 +796,17 @@ def update_overview(start, end, tickers, _):
     Input("ts-measure",    "value"),
     Input("ts-overlay",    "value"),
     Input("refresh-store", "data"),
+    Input("alpha-store",   "data"),
 )
-def update_timeseries(start, end, tickers, measure, overlay, _):
+def update_timeseries(start, end, tickers, measure, overlay, _refresh, _alpha):
     tickers = tickers or []
     df = _slice(MEASURES[measure], start, end, tickers)
 
     labels = {
-        "mes":         ("MES",    "MES (loss fraction)"),
-        "delta_covar": ("DeltaCoVaR", "DeltaCoVaR"),
-        "covar":       ("CoVaR",  "CoVaR"),
+        "mes":         ("MES",       "MES (loss fraction)"),
+        "ses":         ("SES",       "SES (leverage-scaled)"),
+        "delta_covar": ("ΔCoVaR",    "ΔCoVaR"),
+        "covar":       ("CoVaR",     "CoVaR"),
     }
     label, ylabel = labels.get(measure, (measure, measure))
 
@@ -750,8 +829,9 @@ def update_timeseries(start, end, tickers, measure, overlay, _):
     Input("date-range",    "end_date"),
     Input("bank-select",   "value"),
     Input("refresh-store", "data"),
+    Input("alpha-store",   "data"),
 )
-def update_srisk(start, end, tickers, _):
+def update_srisk(start, end, tickers, _refresh, _alpha):
     tickers = tickers or []
     df      = _slice(MEASURES["srisk"], start, end, tickers)
     latest  = _latest_row(df)
@@ -788,8 +868,9 @@ def update_srisk(start, end, tickers, _):
     Input("date-range",    "end_date"),
     Input("bank-select",   "value"),
     Input("refresh-store", "data"),
+    Input("alpha-store",   "data"),
 )
-def update_market(start, end, tickers, _):
+def update_market(start, end, tickers, _refresh, _alpha):
     tickers = tickers or []
     keep    = tickers + [MARKET_NAME]
     prices  = _slice(PRICES,   start, end, keep)
@@ -801,4 +882,5 @@ def update_market(start, end, tickers, _):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    port = int(os.environ.get("PORT", 10000))
+    app.run_server(host="0.0.0.0", port=port)
