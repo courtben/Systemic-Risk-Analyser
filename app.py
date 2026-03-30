@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import os
 from plotly.subplots import make_subplots
 
 import dash
@@ -801,4 +802,5 @@ def update_market(start, end, tickers, _):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(debug=False)
+    port = int(os.environ.get("PORT", 8050))
+    app.run_server(host="0.0.0.0", port=port)
