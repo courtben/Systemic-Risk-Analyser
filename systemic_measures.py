@@ -1,14 +1,16 @@
 """
-Systemic risk measures for CH / US / UK banking institutions.
+Systemic risk measures — translated from TommasoBelluzzo/SystemicRisk (MATLAB).
 
-Implements four canonical market-based measures:
-  - MES   : Marginal Expected Shortfall (Acharya et al. 2017)
-  - SES   : Systemic Expected Shortfall (Acharya et al. 2010)
-  - ΔCoVaR: Delta Conditional Value at Risk (Adrian & Brunnermeier 2016)
-  - SRISK : Systemic Risk / Capital Shortfall (Brownlees & Engle 2017)
+Implements DCC-GJR-GARCH methodology for five canonical market-based measures:
+  - MES      : Marginal Expected Shortfall
+  - SES      : Systemic Expected Shortfall
+  - CoVaR    : Conditional Value at Risk
+  - ΔCoVaR   : Delta Conditional Value at Risk
+  - SRISK    : Systemic Risk / Capital Shortfall
 
-Methodology follows TimoDimi/SystemicRisk (CoVaR/MES joint model)
-adapted to a rolling-window OLS/quantile-regression framework.
+References:
+  Acharya et al. (2010, 2017), Adrian & Brunnermeier (2016),
+  Brownlees & Engle (2017), Belluzzo (2020) github.com/TommasoBelluzzo/SystemicRisk
 """
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import os
 import warnings
 import numpy as np
 import pandas as pd
+from scipy import stats
+from scipy.optimize import minimize
 from statsmodels.regression.quantile_regression import QuantReg
 
 warnings.filterwarnings("ignore")
@@ -23,232 +27,308 @@ warnings.filterwarnings("ignore")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# ── Global parameters ─────────────────────────────────────────────────────────
 
-# ── MES ────────────────────────────────────────────────────────────────────────
+CAR = 0.08   # prudential capital adequacy ratio (Brownlees & Engle 2017)
+D   = 0.40   # LRMES stress horizon: 40 % market decline
+FR  = 3      # forward-roll frequency in months
 
-def compute_mes(
-    bank_returns: pd.Series,
-    market_returns: pd.Series,
-    window: int = 252,
-    alpha: float = 0.05,
-) -> pd.Series:
+
+# ── GJR-GARCH(1,1,1) ─────────────────────────────────────────────────────────
+
+def _fit_gjrgarch(r: np.ndarray) -> np.ndarray:
     """
-    Rolling Marginal Expected Shortfall.
+    Fit GJR-GARCH(1,1,1) with zero mean.  Returns conditional variance h[t].
 
-        MES_i(t) = −E[ R_i,t | R_m,t < VaR_m^α ]
-
-    Measures the expected fractional loss of bank i when the market
-    falls below its α-th percentile.  Returned as a positive number
-    (loss convention).
+    Uses the `arch` package when available; falls back to EWMA(λ=0.94).
+    Returns are passed in decimal units; internally scaled ×100 for numerics.
     """
-    idx = bank_returns.index.intersection(market_returns.index)
-    bank = bank_returns.reindex(idx).values
-    mkt  = market_returns.reindex(idx).values
-    n    = len(idx)
+    r = np.asarray(r, dtype=float)
+    try:
+        from arch import arch_model  # type: ignore
+        am  = arch_model(r * 100.0, mean="Zero", vol="GARCH", p=1, o=1, q=1)
+        res = am.fit(disp="off", show_warning=False)
+        h   = (res.conditional_volatility / 100.0) ** 2
+        return h
+    except Exception:
+        lam  = 0.94
+        h    = np.empty(len(r))
+        h[0] = np.var(r) if len(r) > 1 else 1e-6
+        for t in range(1, len(r)):
+            h[t] = lam * h[t - 1] + (1.0 - lam) * r[t - 1] ** 2
+        return h
 
-    mes = np.full(n, np.nan)
-    for t in range(window, n):
-        wb, wm  = bank[t - window:t], mkt[t - window:t]
-        thresh  = np.quantile(wm, alpha)
-        bad     = wm < thresh
-        if bad.sum() >= max(5, int(window * alpha * 0.5)):
-            mes[t] = -wb[bad].mean()   # flip sign: loss is positive
 
-    return pd.Series(mes, index=idx, name=bank_returns.name)
+# ── DCC(1,1) ──────────────────────────────────────────────────────────────────
 
-
-# ── SES ────────────────────────────────────────────────────────────────────────
-
-def compute_ses(
-    mes_series: pd.Series,
-    market_cap_series: pd.Series,
-    total_liabilities: float | None,
-) -> pd.Series:
+def _fit_dcc(eps: np.ndarray) -> tuple[float, float]:
     """
-    Systemic Expected Shortfall (Acharya et al. 2010).
+    Fit DCC(1,1) parameters (a, b) via conditional log-likelihood.
 
-        SES_i(t) = MES_i(t) × (D_i / W_i(t))
+    eps : (T, 2) array of standardised GARCH residuals.
 
-    where
-        D_i    = book value of total liabilities (constant, from balance sheet)
-        W_i(t) = market capitalisation (price × shares, time-varying)
-
-    SES scales MES by the debt-to-market-cap ratio, capturing both the
-    bank's tail sensitivity (MES) and the amplification effect of leverage.
-    A highly-leveraged bank exhibits a higher SES than a well-capitalised
-    peer with identical MES.  Values > 1.0 are possible for distressed banks.
-
-    Returns NaN for banks without balance sheet or market-cap data.
+    The DCC contribution to the log-likelihood (correlation part only):
+        ℓ_t = −½ [log(1−ρ²) + (e₁²+e₂²−2ρe₁e₂)/(1−ρ²) − e₁² − e₂²]
     """
-    if total_liabilities is None:
-        return pd.Series(np.nan, index=mes_series.index)
+    Q_bar = np.cov(eps.T)
 
-    idx = mes_series.index.intersection(market_cap_series.index)
-    mes = mes_series.reindex(idx)
-    mkt = market_cap_series.reindex(idx).replace(0, np.nan)   # guard ÷0
+    def neg_ll(params: np.ndarray) -> float:
+        a, b = float(params[0]), float(params[1])
+        if a <= 0.0 or b <= 0.0 or a + b >= 1.0:
+            return 1e10
+        Q     = Q_bar.copy()
+        Q_tgt = (1.0 - a - b) * Q_bar
+        ll    = 0.0
+        for t in range(1, len(eps)):
+            Q = Q_tgt + a * np.outer(eps[t - 1], eps[t - 1]) + b * Q
+            rho = np.clip(Q[0, 1] / np.sqrt(Q[0, 0] * Q[1, 1]), -0.9999, 0.9999)
+            e1, e2 = eps[t, 0], eps[t, 1]
+            ll += (
+                np.log(1.0 - rho ** 2)
+                + (e1 ** 2 + e2 ** 2 - 2.0 * rho * e1 * e2) / (1.0 - rho ** 2)
+                - e1 ** 2 - e2 ** 2
+            )
+        return ll
 
-    leverage = total_liabilities / mkt          # D / W  (debt-to-market-cap)
-    return (mes * leverage).rename(mes_series.name)
+    res = minimize(
+        neg_ll,
+        x0     = [0.01, 0.95],
+        method = "L-BFGS-B",
+        bounds = [(1e-6, 0.5), (1e-6, 0.9999)],
+        options = {"ftol": 1e-8, "maxiter": 200},
+    )
+    return float(res.x[0]), float(res.x[1])
+
+
+def _dcc_path(eps: np.ndarray, a: float, b: float) -> np.ndarray:
+    """Compute DCC correlation path ρ[t] from fitted parameters (a, b)."""
+    Q_bar = np.cov(eps.T)
+    Q_tgt = (1.0 - a - b) * Q_bar
+    Q     = Q_bar.copy()
+    T     = len(eps)
+    rho   = np.empty(T)
+    for t in range(T):
+        if t > 0:
+            Q = Q_tgt + a * np.outer(eps[t - 1], eps[t - 1]) + b * Q
+        rho[t] = np.clip(Q[0, 1] / np.sqrt(Q[0, 0] * Q[1, 1]), -0.9999, 0.9999)
+    return rho
+
+
+def dcc_gjrgarch(
+    rm: np.ndarray,
+    rf: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Bivariate DCC-GJR-GARCH(1,1,1) with zero mean.
+
+    Returns
+    -------
+    sm  : conditional volatility of market (std dev, decimal daily)
+    sf  : conditional volatility of firm   (std dev, decimal daily)
+    rho : DCC conditional correlation ρ[t]
+    """
+    hm  = _fit_gjrgarch(rm)
+    hf  = _fit_gjrgarch(rf)
+    sm  = np.sqrt(np.maximum(hm, 1e-12))
+    sf  = np.sqrt(np.maximum(hf, 1e-12))
+    eps = np.column_stack([rm / sm, rf / sf])
+    a, b = _fit_dcc(eps)
+    rho  = _dcc_path(eps, a, b)
+    return sm, sf, rho
 
 
 # ── CoVaR / ΔCoVaR ────────────────────────────────────────────────────────────
 
-def _quantile_reg(y: np.ndarray, x: np.ndarray, q: float) -> np.ndarray:
-    """
-    Linear quantile regression  y = a + b*x  at quantile q.
-    Returns [intercept, slope].
-    """
-    X = np.column_stack([np.ones(len(y)), x])
-    res = QuantReg(y, X).fit(q=q, max_iter=200, p_tol=1e-4, verbose=False)
-    return res.params          # [a, b]
-
-
-def compute_delta_covar(
+def compute_covar_dcovar(
     bank_returns: pd.Series,
     market_returns: pd.Series,
-    window: int = 252,
+    sm: np.ndarray,
+    sf: np.ndarray,
+    rho: np.ndarray,
     alpha: float = 0.05,
-    step: int   = 5,
 ) -> tuple[pd.Series, pd.Series]:
     """
-    Rolling CoVaR and ΔCoVaR via quantile regression.
+    CoVaR and ΔCoVaR via quantile regression on DCC-standardised residuals.
 
-    Model (Adrian & Brunnermeier 2016):
-        R_m = a^q + b^q · R_i + ε^q     fitted at quantile q = alpha
+    Model (Adrian & Brunnermeier 2016 / Belluzzo 2020):
+        rm_0 = b₀ + b₁ · rf_0   at quantile α
 
-    CoVaR_i^α(t) = â^α + b̂^α · VaR_i^α(t)
-    ΔCoVaR_i(t)  = CoVaR_i^α(t) − CoVaR_i^{0.5}(t)
+    CoVaR_i(t)  = b₀ + b₁ · VaR_i(t)        VaR_i(t) = sf(t) · c_i
+    ΔCoVaR_i(t) = b₁ · (VaR_i(t) − Median_i)
 
-    ΔCoVaR captures the *marginal* contribution of bank i to system
-    tail risk (difference between stressed and median state).
+    Returns positive loss convention (larger = more systemic).
+    """
+    idx  = bank_returns.index.intersection(market_returns.index)
+    rm   = market_returns.reindex(idx).values
+    rf   = bank_returns.reindex(idx).values
+    nmin = min(len(idx), len(sm), len(sf), len(rho))
 
-    Parameters
-    ----------
-    step : int
-        Stride between estimation windows (weekly = 5 is standard).
-        Values are linearly interpolated between computed points.
+    rm, rf       = rm[-nmin:], rf[-nmin:]
+    sm_v, sf_v   = sm[-nmin:], sf[-nmin:]
+    rho_v        = rho[-nmin:]
+    idx_out      = idx[-nmin:]
+
+    rm_0 = rm - rm.mean()
+    rf_0 = rf - rf.mean()
+
+    X = np.column_stack([np.ones(nmin), rf_0])
+    b = QuantReg(rm_0, X).fit(q=alpha, max_iter=500, p_tol=1e-5,
+                               verbose=False).params          # [b0, b1]
+
+    c_firm = np.quantile(rf_0 / sf_v, alpha)                 # scalar, < 0
+    var_i  = sf_v * c_firm                                   # time-varying, < 0
+    covar  = b[0] + b[1] * var_i                             # negative return
+    dcovar = b[1] * (var_i - np.median(rf_0))                # negative
+
+    covar_s  = pd.Series(-np.minimum(covar,  0.0), index=idx_out,
+                         name=bank_returns.name)
+    dcovar_s = pd.Series(-np.minimum(dcovar, 0.0), index=idx_out,
+                         name=bank_returns.name)
+    return covar_s, dcovar_s
+
+
+# ── MES / LRMES ───────────────────────────────────────────────────────────────
+
+def compute_mes_lrmes(
+    bank_returns: pd.Series,
+    market_returns: pd.Series,
+    sm: np.ndarray,
+    sf: np.ndarray,
+    rho: np.ndarray,
+    alpha: float = 0.05,
+    d: float = D,
+) -> tuple[pd.Series, pd.Series]:
+    """
+    MES via Silverman-kernel conditional expectation (Belluzzo 2020).
+
+    k₁, k₂ are global scalars estimated from the full sample.
+    Time variation enters entirely through sm(t), sf(t), ρ(t).
+
+        MES(t)   = −min(sf(t)·ρ(t)·k₁  +  sf(t)·z(t)·k₂,  0)
+        β(t)     = ρ(t) · sf(t) / sm(t)
+        LRMES(t) = 1 − exp(log(1−d) · β(t))
 
     Returns
     -------
-    covar      : pd.Series (negative — VaR convention)
-    delta_covar: pd.Series (negative — more negative = more systemic)
+    mes   : pd.Series  (positive, daily)
+    lrmes : pd.Series  (fraction, 0–1)
     """
     idx  = bank_returns.index.intersection(market_returns.index)
-    bank = bank_returns.reindex(idx).values
-    mkt  = market_returns.reindex(idx).values
-    n    = len(idx)
+    rm   = market_returns.reindex(idx).values
+    rf   = bank_returns.reindex(idx).values
+    nmin = min(len(idx), len(sm), len(sf), len(rho))
 
-    covar_arr  = np.full(n, np.nan)
-    dcovar_arr = np.full(n, np.nan)
+    rm, rf       = rm[-nmin:], rf[-nmin:]
+    sm_v, sf_v   = sm[-nmin:], sf[-nmin:]
+    rho_v        = rho[-nmin:]
+    idx_out      = idx[-nmin:]
 
-    for t in range(window, n, step):
-        wb, wm = bank[t - window:t], mkt[t - window:t]
-        try:
-            params_q   = _quantile_reg(wm, wb, alpha)
-            params_med = _quantile_reg(wm, wb, 0.5)
-        except Exception:
-            continue
+    rm_0   = rm - rm.mean()
+    rf_0   = rf - rf.mean()
 
-        var_q   = np.quantile(wb, alpha)
-        var_med = np.median(wb)
+    c_mkt  = np.quantile(rm_0, alpha)                         # scalar, < 0
+    u      = rm_0 / sm_v                                      # standardised market
+    z_v    = np.sqrt(np.maximum(1.0 - rho_v ** 2, 1e-8))
+    x      = (rf_0 / sf_v - rho_v * u) / z_v
 
-        covar_q   = params_q[0]   + params_q[1]   * var_q
-        covar_med = params_med[0] + params_med[1] * var_med
+    # Silverman bandwidth on standardised market residuals
+    h_bw   = np.std(u) * (4.0 / (3.0 * nmin)) ** 0.2
+    f      = stats.norm.cdf((c_mkt / sm_v - u) / h_bw)
 
-        covar_arr[t]  = covar_q
-        dcovar_arr[t] = covar_q - covar_med
+    sum_f  = f.sum()
+    k1     = float((u * f).sum() / sum_f) if sum_f > 0 else 0.0
+    k2     = float((x * f).sum() / sum_f) if sum_f > 0 else 0.0
 
-    covar  = pd.Series(covar_arr,  index=idx).interpolate("linear")
-    dcovar = pd.Series(dcovar_arr, index=idx).interpolate("linear")
-    return covar, dcovar
+    mes_raw  = sf_v * rho_v * k1 + sf_v * z_v * k2
+    mes_vals = -np.minimum(mes_raw, 0.0)
+
+    beta_v   = rho_v * (sf_v / sm_v)
+    lrmes_v  = 1.0 - np.exp(np.log(1.0 - d) * beta_v)
+
+    mes_s   = pd.Series(mes_vals,                    index=idx_out, name=bank_returns.name)
+    lrmes_s = pd.Series(np.clip(lrmes_v, 0.0, 1.0), index=idx_out, name=bank_returns.name)
+    return mes_s, lrmes_s
 
 
-# ── SRISK ──────────────────────────────────────────────────────────────────────
+# ── SES ───────────────────────────────────────────────────────────────────────
 
-def compute_srisk(
-    mes_series: pd.Series,
-    market_cap_series: pd.Series,
-    total_liabilities: float | None,
-    k: float = 0.08,
-    h: int   = 22,
+def compute_ses(
+    lb: pd.Series,
+    cp: pd.Series,
+    car: float = CAR,
 ) -> pd.Series:
     """
-    Rolling SRISK (Brownlees & Engle 2017).
+    Systemic Expected Shortfall (Belluzzo / Acharya et al. 2010).
 
-        LRMES_i(t) = 1 − exp(−h · MES_i(t))
-        SRISK_i(t) = max(0,  k · D_i  −  (1−k) · (1 − LRMES_i(t)) · W_i(t))
+        SES(t) = max(0,  car·lb(t)·(1+Δlb/lb)  −  (1−car)·cp(t)·(1+Δcp/cp))
 
-    where
-        D_i  = book value of total liabilities (assumed constant)
-        W_i  = market capitalization (time-varying: price × shares)
-        k    = prudential capital ratio (8 %)
-        h    = LRMES stress horizon in trading days (22 ≈ 1 month)
-
-    Returns NaN for banks without balance sheet data.
+    lb : total liabilities  (daily, forward-filled from quarterly filings)
+    cp : market capitalisation (daily, price × shares)
     """
-    if total_liabilities is None:
-        return pd.Series(np.nan, index=mes_series.index)
+    idx  = lb.index.intersection(cp.index)
+    lb_  = lb.reindex(idx).replace(0.0, np.nan)
+    cp_  = cp.reindex(idx).replace(0.0, np.nan)
 
-    idx = mes_series.index.intersection(market_cap_series.index)
-    mes = mes_series.reindex(idx).clip(0, 0.99)
-    mkt = market_cap_series.reindex(idx)
+    lb_pc = lb_.pct_change().fillna(0.0)
+    eq_pc = cp_.pct_change().fillna(0.0)
 
-    lrmes = 1.0 - np.exp(-h * mes)
-    srisk = k * total_liabilities - (1.0 - k) * (1.0 - lrmes) * mkt
-    srisk = srisk.clip(lower=0)
-    return srisk
+    ses = car * lb_ * (1.0 + lb_pc) - (1.0 - car) * cp_ * (1.0 + eq_pc)
+    return ses.clip(lower=0.0)
 
 
-# ── Fast recompute for interactive alpha changes ────────────────────────────────
+# ── SRISK ─────────────────────────────────────────────────────────────────────
 
-def recompute_for_alpha(
-    returns: pd.DataFrame,
-    market_cap_ts: pd.DataFrame,
-    balance_sheet: dict,
-    alpha: float = 0.05,
-    window: int = 252,
-) -> dict[str, pd.DataFrame]:
+def compute_srisk(
+    lrmes: pd.Series,
+    lbr: pd.Series,
+    cp: pd.Series,
+    car: float = CAR,
+) -> pd.Series:
     """
-    Recompute MES, SES, and SRISK for a new alpha value (no disk cache).
+    SRISK (Brownlees & Engle 2017 / Belluzzo 2020).
 
-    ΔCoVaR is intentionally excluded — quantile regression over all banks
-    takes 5–10 minutes and is not suitable for interactive use.  The caller
-    should merge the returned dict into MEASURES while keeping the cached
-    'covar' and 'delta_covar' entries unchanged.
+        SRISK(t) = max(0,  car·lbr(t)  −  (1−car)·(1−LRMES(t))·cp(t))
 
-    Parameters
-    ----------
-    alpha : float
-        Tail threshold, e.g. 0.05 for worst-5 % market days.
+    lrmes : long-run MES fraction (0–1)
+    lbr   : forward-rolled liabilities (quarterly step function)
+    cp    : market capitalisation (daily)
     """
-    from data_load import ALL_BANKS, MARKET_NAME
+    idx   = lrmes.index.intersection(lbr.index).intersection(cp.index)
+    lr    = lrmes.reindex(idx).clip(0.0, 1.0)
+    lb    = lbr.reindex(idx)
+    cap   = cp.reindex(idx)
 
-    mkt_ret   = returns[MARKET_NAME] if MARKET_NAME in returns.columns else \
-                returns[returns.columns.intersection(["SMI", "S&P 500", "Market"])].iloc[:, 0]
-    bank_cols = [c for c in returns.columns if c in ALL_BANKS]
+    srisk = car * lb - (1.0 - car) * (1.0 - lr) * cap
+    return srisk.clip(lower=0.0)
 
-    mes_d, ses_d, srisk_d = {}, {}, {}
 
-    for ticker in bank_cols:
-        bank_ret      = returns[ticker].dropna()
-        mes_s         = compute_mes(bank_ret, mkt_ret, window, alpha)
-        mes_d[ticker] = mes_s
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-        mc_ts      = market_cap_ts.get(ticker)
-        total_liab = balance_sheet.get(ticker, {}).get("total_liabilities")
+def _load_dcc_cache() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """Load cached DCC outputs (sm, sf, rho) if available."""
+    paths = {k: os.path.join(CACHE_DIR, f"{k}.parquet")
+             for k in ("dcc_sm", "dcc_sf", "dcc_rho")}
+    if not all(os.path.exists(p) for p in paths.values()):
+        return None
+    return (
+        pd.read_parquet(paths["dcc_sm"]),
+        pd.read_parquet(paths["dcc_sf"]),
+        pd.read_parquet(paths["dcc_rho"]),
+    )
 
-        if mc_ts is not None:
-            ses_d[ticker]   = compute_ses(mes_s, mc_ts, total_liab)
-            srisk_d[ticker] = compute_srisk(mes_s, mc_ts, total_liab)
-        else:
-            ses_d[ticker]   = pd.Series(np.nan, index=mes_s.index)
-            srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
 
-    return {
-        "mes":   pd.DataFrame(mes_d),
-        "ses":   pd.DataFrame(ses_d),
-        "srisk": pd.DataFrame(srisk_d),
-    }
+def _save_dcc_cache(
+    sm_d: dict, sf_d: dict, rho_d: dict,
+    index_map: dict[str, pd.Index],
+) -> None:
+    """Persist DCC outputs to parquet."""
+    def _to_df(d: dict) -> pd.DataFrame:
+        series = {t: pd.Series(v, index=index_map[t]) for t, v in d.items()}
+        return pd.DataFrame(series)
+
+    _to_df(sm_d).to_parquet(os.path.join(CACHE_DIR, "dcc_sm.parquet"))
+    _to_df(sf_d).to_parquet(os.path.join(CACHE_DIR, "dcc_sf.parquet"))
+    _to_df(rho_d).to_parquet(os.path.join(CACHE_DIR, "dcc_rho.parquet"))
 
 
 # ── Orchestration ──────────────────────────────────────────────────────────────
@@ -256,66 +336,92 @@ def recompute_for_alpha(
 def compute_all(
     returns: pd.DataFrame,
     market_cap_ts: pd.DataFrame,
+    lb_daily: pd.DataFrame | None,
+    lbr_daily: pd.DataFrame | None,
     balance_sheet: dict,
-    window: int = 252,
     alpha: float = 0.05,
-    step: int   = 5,
+    d: float = D,
+    car: float = CAR,
     force_refresh: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
-    Compute MES, SES, ΔCoVaR, and SRISK for all available banks.
+    Compute MES, SES, CoVaR, ΔCoVaR, and SRISK for all available banks.
 
-    Results are cached to disk as parquet files under ./cache/.
-    Pass force_refresh=True to ignore the cache.
+    DCC-GJR-GARCH is fitted per bank (market + firm bivariate).
+    Results and DCC outputs are cached as parquet files under ./cache/.
+    Pass force_refresh=True to bypass the cache.
 
     Returns
     -------
-    dict with keys 'mes', 'ses', 'covar', 'delta_covar', 'srisk'
+    dict with keys 'mes', 'ses', 'covar', 'delta_covar', 'srisk'.
     Each value is a pd.DataFrame with bank tickers as columns.
     """
-    cache_paths = {
-        k: os.path.join(CACHE_DIR, f"measures_{k}.parquet")
-        for k in ("mes", "ses", "covar", "delta_covar", "srisk")
-    }
+    measure_keys = ("mes", "ses", "covar", "delta_covar", "srisk")
+    cache = {k: os.path.join(CACHE_DIR, f"measures_{k}.parquet")
+             for k in measure_keys}
+    dcc_paths = [os.path.join(CACHE_DIR, f"{k}.parquet")
+                 for k in ("dcc_sm", "dcc_sf", "dcc_rho")]
 
-    # Return cached results if all files exist and are fresh (<12 h)
-    if not force_refresh and all(os.path.exists(p) for p in cache_paths.values()):
-        oldest = min(os.path.getmtime(p) for p in cache_paths.values())
+    all_cache = list(cache.values()) + dcc_paths
+    if not force_refresh and all(os.path.exists(p) for p in all_cache):
+        oldest = min(os.path.getmtime(p) for p in all_cache)
         age_h  = (pd.Timestamp.now().timestamp() - oldest) / 3600
         if age_h < 12:
             print(f"  Loaded measures from cache ({age_h:.1f}h old)")
-            return {k: pd.read_parquet(p) for k, p in cache_paths.items()}
+            return {k: pd.read_parquet(p) for k, p in cache.items()}
 
     from data_load import ALL_BANKS, MARKET_NAME
 
-    mkt_ret = returns[MARKET_NAME] if MARKET_NAME in returns.columns else \
-              returns[returns.columns.intersection(["SMI", "S&P 500", "Market"])].iloc[:, 0]
+    mkt_ret   = (returns[MARKET_NAME] if MARKET_NAME in returns.columns
+                 else returns[returns.columns.intersection(
+                     ["SMI", "S&P 500", "Market"])].iloc[:, 0])
     bank_cols = [c for c in returns.columns if c in ALL_BANKS]
 
     mes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}
+    sm_d, sf_d, rho_d, idx_map = {}, {}, {}, {}
 
     for ticker in bank_cols:
         name = ALL_BANKS.get(ticker, ticker)
         print(f"  {name} ({ticker}) ...")
 
         bank_ret = returns[ticker].dropna()
+        idx      = bank_ret.index.intersection(mkt_ret.index)
+        rm       = mkt_ret.reindex(idx).values
+        rf       = bank_ret.reindex(idx).values
 
-        mes_d[ticker] = compute_mes(bank_ret, mkt_ret, window, alpha)
+        # DCC-GJR-GARCH
+        sm, sf, rho = dcc_gjrgarch(rm, rf)
 
-        covar_s, dcovar_s = compute_delta_covar(
-            bank_ret, mkt_ret, window, alpha, step
-        )
+        nmin    = min(len(idx), len(sm))
+        idx_out = idx[-nmin:]
+
+        sm_d[ticker]  = sm[-nmin:]
+        sf_d[ticker]  = sf[-nmin:]
+        rho_d[ticker] = rho[-nmin:]
+        idx_map[ticker] = idx_out
+
+        covar_s, dcovar_s = compute_covar_dcovar(
+            bank_ret, mkt_ret, sm, sf, rho, alpha)
         covar_d[ticker]  = covar_s
         dcovar_d[ticker] = dcovar_s
 
-        mc_ts      = market_cap_ts.get(ticker)  # may be None for some banks
-        total_liab = balance_sheet.get(ticker, {}).get("total_liabilities")
-        if mc_ts is not None:
-            ses_d[ticker]   = compute_ses(mes_d[ticker], mc_ts, total_liab)
-            srisk_d[ticker] = compute_srisk(mes_d[ticker], mc_ts, total_liab)
+        mes_s, lrmes_s = compute_mes_lrmes(
+            bank_ret, mkt_ret, sm, sf, rho, alpha, d)
+        mes_d[ticker] = mes_s
+
+        cp_ts  = market_cap_ts.get(ticker)
+        lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
+        lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
+
+        if cp_ts is not None and lb_ts is not None:
+            ses_d[ticker]   = compute_ses(lb_ts, cp_ts, car)
         else:
-            ses_d[ticker]   = pd.Series(np.nan, index=mes_d[ticker].index)
-            srisk_d[ticker] = pd.Series(np.nan, index=mes_d[ticker].index)
+            ses_d[ticker]   = pd.Series(np.nan, index=mes_s.index)
+
+        if cp_ts is not None and lbr_ts is not None:
+            srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
+        else:
+            srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
 
     result = {
         "mes":         pd.DataFrame(mes_d),
@@ -325,6 +431,84 @@ def compute_all(
         "srisk":       pd.DataFrame(srisk_d),
     }
     for k, df in result.items():
-        df.to_parquet(cache_paths[k])
+        df.to_parquet(cache[k])
 
+    _save_dcc_cache(sm_d, sf_d, rho_d, idx_map)
     return result
+
+
+# ── Fast recompute for interactive alpha changes ────────────────────────────────
+
+def recompute_for_alpha(
+    returns: pd.DataFrame,
+    market_cap_ts: pd.DataFrame,
+    lb_daily: pd.DataFrame | None,
+    lbr_daily: pd.DataFrame | None,
+    balance_sheet: dict,
+    alpha: float = 0.05,
+    d: float = D,
+    car: float = CAR,
+) -> dict[str, pd.DataFrame]:
+    """
+    Recompute all measures for a new alpha using cached DCC outputs.
+
+    Avoids refitting DCC-GJR-GARCH (the computationally expensive step).
+    Falls back to a full compute_all() if the DCC cache is absent.
+    """
+    cached = _load_dcc_cache()
+    if cached is None:
+        return compute_all(
+            returns, market_cap_ts, lb_daily, lbr_daily, balance_sheet,
+            alpha=alpha, d=d, car=car,
+        )
+
+    dcc_sm, dcc_sf, dcc_rho = cached
+
+    from data_load import ALL_BANKS, MARKET_NAME
+
+    mkt_ret   = (returns[MARKET_NAME] if MARKET_NAME in returns.columns
+                 else returns[returns.columns.intersection(
+                     ["SMI", "S&P 500", "Market"])].iloc[:, 0])
+    bank_cols = [c for c in returns.columns if c in ALL_BANKS]
+
+    mes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}
+
+    for ticker in bank_cols:
+        if ticker not in dcc_sm.columns:
+            continue
+
+        bank_ret = returns[ticker].dropna()
+        sm  = dcc_sm[ticker].dropna().values
+        sf  = dcc_sf[ticker].dropna().values
+        rho = dcc_rho[ticker].dropna().values
+
+        covar_s, dcovar_s = compute_covar_dcovar(
+            bank_ret, mkt_ret, sm, sf, rho, alpha)
+        covar_d[ticker]  = covar_s
+        dcovar_d[ticker] = dcovar_s
+
+        mes_s, lrmes_s = compute_mes_lrmes(
+            bank_ret, mkt_ret, sm, sf, rho, alpha, d)
+        mes_d[ticker] = mes_s
+
+        cp_ts  = market_cap_ts.get(ticker)
+        lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
+        lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
+
+        if cp_ts is not None and lb_ts is not None:
+            ses_d[ticker] = compute_ses(lb_ts, cp_ts, car)
+        else:
+            ses_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+
+        if cp_ts is not None and lbr_ts is not None:
+            srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
+        else:
+            srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+
+    return {
+        "mes":         pd.DataFrame(mes_d),
+        "ses":         pd.DataFrame(ses_d),
+        "covar":       pd.DataFrame(covar_d),
+        "delta_covar": pd.DataFrame(dcovar_d),
+        "srisk":       pd.DataFrame(srisk_d),
+    }
