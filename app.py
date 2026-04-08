@@ -41,15 +41,19 @@ RETURNS = D.compute_returns(PRICES)
 print("\n[3/5] Fetching balance sheet data ...")
 BS = D.get_balance_sheet()
 
-print("\n[4/5] Fetching liabilities time series ...")
-LIAB_TS   = D.get_liabilities_ts()
-LB_DAILY  = D.build_lb_daily(LIAB_TS, PRICES)
-LBR_DAILY = D.build_lbr_daily(LIAB_TS, PRICES)
+print("\n[4/6] Fetching liabilities and separate-account time series ...")
+LIAB_TS      = D.get_liabilities_ts()
+SEP_ACCT_TS  = D.get_separate_accounts_ts()
+LB_DAILY     = D.build_lb_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
+LBR_DAILY    = D.build_lbr_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
 
-print("\n[5/5] Computing systemic risk measures (DCC-GJR-GARCH) ...")
+print("\n[5/6] Fetching systemic state variables ...")
+STATE_VARS = D.get_state_variables(PRICES)
+
+print("\n[6/6] Computing systemic risk measures (DCC-GJR-GARCH) ...")
 MC_TS    = D.build_market_cap_series(PRICES, BS)
 # Returns dict with keys: 'mes', 'ses', 'covar', 'delta_covar', 'srisk'
-MEASURES = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS)
+MEASURES = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS)
 
 LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
 print(f"\nReady  ({LAST_UPDATED})")
@@ -98,7 +102,11 @@ def _color(ticker: str) -> str:
 
 
 def _fmt_bn(x) -> str:
-    return "N/A" if pd.isna(x) or x == 0 else f"{x / 1e9:.2f} bn"
+    if pd.isna(x):
+        return "N/A"
+    if x == 0:
+        return "0.00 bn"
+    return f"{x / 1e9:.2f} bn"
 
 
 def _fmt_pct(x) -> str:
@@ -124,21 +132,26 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
     colors = [_color(t) for t in s.index]
     labels = [_name(t) for t in s.index]
     text   = [fmt_fn(v) for v in s.values]
+    # Scale to billions for bn-formatted charts so x-axis is readable
+    xvals  = s.values / 1e9 if fmt_fn is _fmt_bn else s.values
 
     fig = go.Figure(go.Bar(
-        x=s.values, y=labels,
+        x=xvals, y=labels,
         orientation="h",
         marker_color=colors,
         marker_line_width=0,
-        text=text, textposition="outside",
+        text=text, textposition="auto",
+        insidetextanchor="middle",
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
+    base = _base_layout()
+    base["margin"] = dict(l=10, r=90, t=45, b=30)
     fig.update_layout(
         title=dict(text=title, font=dict(size=14)),
         xaxis_title=xlabel,
         yaxis=dict(autorange="reversed"),
         height=300,
-        **_base_layout(),
+        **base,
     )
     return fig
 
@@ -200,16 +213,18 @@ def srisk_bar(series: pd.Series, title: str) -> go.Figure:
         marker_color=[_color(t) for t in s.index],
         marker_line_width=0,
         text=[_fmt_bn(v) for v in s.values],
-        textposition="outside",
+        textposition="auto",
+        insidetextanchor="middle",
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
+    base = _base_layout()
+    base["margin"] = dict(l=10, r=80, t=45, b=30)
     fig.update_layout(
         title=dict(text=title, font=dict(size=14)),
         xaxis_title="SRISK (bn, native currency)",
         yaxis=dict(autorange="reversed"),
         height=320,
-        margin=dict(l=10, r=100, t=45, b=30),
-        **_base_layout(),
+        **base,
     )
     return fig
 
@@ -544,9 +559,9 @@ timeseries_layout = dbc.Container([
                     f"market ({MARKET_NAME}) falls below its α-th percentile (set above). "
                     "Higher MES = greater tail sensitivity.",
                     html.Br(),
-                    html.B("SES"), " = MES × (D/W) — leverage-scaled MES (Acharya et al. 2010). "
-                    "D = total liabilities, W = market cap.  Captures both tail sensitivity and "
-                    "capital structure fragility.  Values > 100% possible for highly leveraged banks.",
+                    html.B("SES"), " — capital shortfall estimate (Acharya et al. 2010). "
+                    "SES = max(0, k·D·(1+ΔD/D) − (1−k)·W·(1+ΔW/W)), k = 8% capital ratio. "
+                    "D = liabilities, W = market cap.  Reported in USD billions.",
                     html.Br(),
                     html.B("ΔCoVaR"), " — market's VaR when the bank is in stress minus "
                     "its VaR at its median state (Adrian & Brunnermeier 2016). "
@@ -678,7 +693,7 @@ def update_bank_options(_all, _none, custom_banks, current_values):
     prevent_initial_call=True,
 )
 def add_custom_bank(n_clicks, ticker_input, custom_banks):
-    global PRICES, RETURNS, MC_TS, BS, LIAB_TS, LB_DAILY, LBR_DAILY, MEASURES, ALL_BANKS
+    global PRICES, RETURNS, MC_TS, BS, LIAB_TS, SEP_ACCT_TS, LB_DAILY, LBR_DAILY, STATE_VARS, MEASURES, ALL_BANKS
     from dash import no_update
 
     ticker = (ticker_input or "").strip().upper()
@@ -721,13 +736,21 @@ def add_custom_bank(n_clicks, ticker_input, custom_banks):
         liab_s = bank_data["liab_ts"]
         liab_s.name = ticker
         new_liab_df = pd.DataFrame({ticker: liab_s})
+        new_sa_df = pd.DataFrame()
+        if bank_data.get("separate_accounts_ts") is not None:
+            sa_s = bank_data["separate_accounts_ts"]
+            sa_s.name = ticker
+            new_sa_df = pd.DataFrame({ticker: sa_s})
+            SEP_ACCT_TS = (SEP_ACCT_TS.reindex(SEP_ACCT_TS.index.union(sa_s.index))
+                                      .sort_index())
+            SEP_ACCT_TS[ticker] = sa_s.reindex(SEP_ACCT_TS.index)
         # Merge into LIAB_TS
         LIAB_TS = (LIAB_TS.reindex(LIAB_TS.index.union(liab_s.index))
                            .sort_index())
         LIAB_TS[ticker] = liab_s.reindex(LIAB_TS.index)
         # Build daily series for this bank
-        lb_one  = D.build_lb_daily(new_liab_df,  PRICES[[ticker]])
-        lbr_one = D.build_lbr_daily(new_liab_df, PRICES[[ticker]])
+        lb_one  = D.build_lb_daily(new_liab_df,  PRICES[[ticker]], new_sa_df)
+        lbr_one = D.build_lbr_daily(new_liab_df, PRICES[[ticker]], new_sa_df)
         if ticker in lb_one.columns:
             LB_DAILY[ticker]  = lb_one[ticker]
         if ticker in lbr_one.columns:
@@ -740,7 +763,7 @@ def add_custom_bank(n_clicks, ticker_input, custom_banks):
     idx      = bank_ret.index.intersection(mkt_ret.index)
     rm, rf   = mkt_ret.reindex(idx).values, bank_ret.reindex(idx).values
 
-    sm, sf, rho = M.dcc_gjrgarch(rm, rf)
+    sm, sf, rho = M.dcc_gjrgarch(rm, rf, market_label=MARKET_NAME, firm_label=ticker)
 
     # Persist DCC outputs to cache so recompute_for_alpha can find this bank
     nmin    = min(len(idx), len(sm))
@@ -748,17 +771,14 @@ def add_custom_bank(n_clicks, ticker_input, custom_banks):
     for dcc_key, arr in [("dcc_sm", sm[-nmin:]),
                           ("dcc_sf", sf[-nmin:]),
                           ("dcc_rho", rho[-nmin:])]:
-        cache_path = os.path.join(M.CACHE_DIR, f"{dcc_key}.parquet")
-        if os.path.exists(cache_path):
-            try:
-                existing = pd.read_parquet(cache_path)
-                existing[ticker] = pd.Series(arr, index=idx_out).reindex(existing.index)
-                existing.to_parquet(cache_path)
-            except Exception as _e:
-                print(f"  Warning: DCC cache update failed for {dcc_key}: {_e}")
+        try:
+            M.update_dcc_cache_column(dcc_key, ticker, arr, idx_out)
+        except Exception as _e:
+            print(f"  Warning: DCC cache update failed for {dcc_key}: {_e}")
 
     alpha = 0.05
-    covar_s, dcovar_s = M.compute_covar_dcovar(bank_ret, mkt_ret, sm, sf, rho, alpha)
+    state_vars = STATE_VARS.reindex(idx_out) if not STATE_VARS.empty else None
+    covar_s, dcovar_s = M.compute_covar_dcovar(bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
     mes_s,   lrmes_s  = M.compute_mes_lrmes(   bank_ret, mkt_ret, sm, sf, rho, alpha)
 
     cp_ts  = MC_TS.get(ticker)
@@ -799,16 +819,18 @@ def add_custom_bank(n_clicks, ticker_input, custom_banks):
     prevent_initial_call=True,
 )
 def refresh_data(n_clicks, current, custom_banks):
-    global PRICES, RETURNS, BS, MC_TS, LIAB_TS, LB_DAILY, LBR_DAILY, MEASURES, LAST_UPDATED, ALL_BANKS
+    global PRICES, RETURNS, BS, MC_TS, LIAB_TS, SEP_ACCT_TS, LB_DAILY, LBR_DAILY, STATE_VARS, MEASURES, LAST_UPDATED, ALL_BANKS
     print("\n[Refresh] Re-fetching data ...")
     PRICES    = D.get_prices(force_refresh=True)
     RETURNS   = D.compute_returns(PRICES)
     BS        = D.get_balance_sheet(force_refresh=True)
     LIAB_TS   = D.get_liabilities_ts(force_refresh=True)
-    LB_DAILY  = D.build_lb_daily(LIAB_TS, PRICES)
-    LBR_DAILY = D.build_lbr_daily(LIAB_TS, PRICES)
+    SEP_ACCT_TS = D.get_separate_accounts_ts(force_refresh=True)
+    LB_DAILY  = D.build_lb_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
+    LBR_DAILY = D.build_lbr_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
+    STATE_VARS = D.get_state_variables(PRICES, force_refresh=True)
     MC_TS     = D.build_market_cap_series(PRICES, BS)
-    MEASURES  = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, force_refresh=True)
+    MEASURES  = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS, force_refresh=True)
 
     # Re-add any custom banks the user had added this session
     for ticker, name in (custom_banks or {}).items():
@@ -826,8 +848,13 @@ def refresh_data(n_clicks, current, custom_banks):
             if bank_data["liab_ts"] is not None:
                 liab_s = bank_data["liab_ts"]
                 LIAB_TS[ticker] = liab_s.reindex(LIAB_TS.index)
-                lb_one  = D.build_lb_daily( pd.DataFrame({ticker: liab_s}), PRICES[[ticker]])
-                lbr_one = D.build_lbr_daily(pd.DataFrame({ticker: liab_s}), PRICES[[ticker]])
+                sa_df = pd.DataFrame()
+                if bank_data.get("separate_accounts_ts") is not None:
+                    sa_s = bank_data["separate_accounts_ts"]
+                    SEP_ACCT_TS[ticker] = sa_s.reindex(SEP_ACCT_TS.index)
+                    sa_df = pd.DataFrame({ticker: sa_s})
+                lb_one  = D.build_lb_daily( pd.DataFrame({ticker: liab_s}), PRICES[[ticker]], sa_df)
+                lbr_one = D.build_lbr_daily(pd.DataFrame({ticker: liab_s}), PRICES[[ticker]], sa_df)
                 if ticker in lb_one.columns:
                     LB_DAILY[ticker]  = lb_one[ticker]
                 if ticker in lbr_one.columns:
@@ -836,9 +863,13 @@ def refresh_data(n_clicks, current, custom_banks):
             mkt_ret  = RETURNS[MARKET_NAME]
             bank_ret = RETURNS[ticker].dropna()
             idx      = bank_ret.index.intersection(mkt_ret.index)
-            sm, sf, rho = M.dcc_gjrgarch(mkt_ret.reindex(idx).values,
-                                          bank_ret.reindex(idx).values)
-            covar_s, dcovar_s = M.compute_covar_dcovar(bank_ret, mkt_ret, sm, sf, rho)
+            sm, sf, rho = M.dcc_gjrgarch(
+                mkt_ret.reindex(idx).values,
+                bank_ret.reindex(idx).values,
+                market_label=MARKET_NAME,
+                firm_label=ticker,
+            )
+            covar_s, dcovar_s = M.compute_covar_dcovar(bank_ret, mkt_ret, sm, sf, rho, state_vars=STATE_VARS)
             mes_s,   lrmes_s  = M.compute_mes_lrmes(   bank_ret, mkt_ret, sm, sf, rho)
             cp_ts  = MC_TS.get(ticker)
             lb_ts  = LB_DAILY.get(ticker)  if LB_DAILY  is not None else None
@@ -871,7 +902,7 @@ def update_alpha(alpha_pct):
     global MEASURES
     alpha = alpha_pct / 100.0
     print(f"\n[α] Recomputing MES/SES/SRISK for α={alpha:.3f} ...")
-    new = M.recompute_for_alpha(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, alpha=alpha)
+    new = M.recompute_for_alpha(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS, alpha=alpha)
     # Merge column-by-column so custom banks not in `new` are preserved
     for key in new:
         updated = MEASURES[key].copy()
@@ -921,8 +952,8 @@ def update_overview(start, end, tickers, _refresh, _alpha):
                         "Mean expected loss on market crash days",
                         "#c62828")
     kpi_ses  = kpi_card("Avg. SES (latest)",
-                        _fmt_pct(agg_ses),
-                        "Leverage-scaled MES (Acharya et al. 2010)",
+                        _fmt_bn(agg_ses if not pd.isna(agg_ses) and agg_ses > 0 else float("nan")),
+                        "Capital shortfall estimate (Acharya et al. 2010)",
                         "#6a1b9a")
     kpi_cov  = kpi_card("Avg. |ΔCoVaR| (latest)",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
@@ -934,7 +965,7 @@ def update_overview(start, end, tickers, _refresh, _alpha):
                          "#2e7d32")
 
     fig_mes   = ranking_bar(latest_mes,         "MES Ranking (latest)",         "MES")
-    fig_ses   = ranking_bar(latest_ses,         "SES Ranking (latest)",         "SES (leverage-scaled)")
+    fig_ses   = ranking_bar(latest_ses[latest_ses > 0], "SES Ranking (latest)",  "SES (capital shortfall)", fmt_fn=_fmt_bn)
     fig_covar = ranking_bar(latest_covar.abs(), "|ΔCoVaR| Ranking (latest)",   "|ΔCoVaR|")
 
     # Summary table
@@ -948,7 +979,7 @@ def update_overview(start, end, tickers, _refresh, _alpha):
             html.Td(_name(t), style={"fontWeight": "500"}),
             html.Td(t, className="text-muted", style={"fontSize": "0.8rem"}),
             html.Td(_fmt_pct(latest_mes.get(t,   float("nan")))),
-            html.Td(_fmt_pct(latest_ses.get(t,   float("nan")))),
+            html.Td(_fmt_bn(latest_ses.get(t,    float("nan")))),
             html.Td(_fmt_pct(latest_covar.get(t, float("nan")))),
             html.Td(_fmt_bn(latest_srisk.get(t,  float("nan")))),
         ]))
@@ -957,7 +988,7 @@ def update_overview(start, end, tickers, _refresh, _alpha):
         [
             html.Thead(html.Tr([
                 html.Th(""), html.Th("Bank"),
-                html.Th("Ticker"), html.Th("MES"), html.Th("SES"),
+                html.Th("Ticker"), html.Th("MES"), html.Th("SES (bn)"),
                 html.Th("ΔCoVaR"), html.Th("SRISK"),
             ]), style={"backgroundColor": "#f8f9fa"}),
             html.Tbody(rows),

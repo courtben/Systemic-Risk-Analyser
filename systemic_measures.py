@@ -15,12 +15,13 @@ References:
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 import warnings
 import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.optimize import minimize
-from statsmodels.regression.quantile_regression import QuantReg
 
 warnings.filterwarnings("ignore")
 
@@ -36,11 +37,12 @@ FR  = 3      # forward-roll frequency in months
 
 # ── GJR-GARCH(1,1,1) ─────────────────────────────────────────────────────────
 
-def _fit_gjrgarch(r: np.ndarray) -> np.ndarray:
+def _fit_gjrgarch(r: np.ndarray, label: str = "series") -> np.ndarray:
     """
     Fit GJR-GARCH(1,1,1) with zero mean.  Returns conditional variance h[t].
 
     Uses the `arch` package when available; falls back to EWMA(λ=0.94).
+    The fallback is explicitly reported because it is not model-equivalent.
     Returns are passed in decimal units; internally scaled ×100 for numerics.
     """
     r = np.asarray(r, dtype=float)
@@ -50,7 +52,13 @@ def _fit_gjrgarch(r: np.ndarray) -> np.ndarray:
         res = am.fit(disp="off", show_warning=False)
         h   = (res.conditional_volatility / 100.0) ** 2
         return h
-    except Exception:
+    except Exception as exc:
+        msg = (
+            f"GJR-GARCH fit failed for {label}; falling back to EWMA(0.94). "
+            f"Reason: {type(exc).__name__}: {exc}"
+        )
+        warnings.warn(msg, RuntimeWarning)
+        print(f"  Warning: {msg}")
         lam  = 0.94
         h    = np.empty(len(r))
         h[0] = np.var(r) if len(r) > 1 else 1e-6
@@ -117,6 +125,8 @@ def _dcc_path(eps: np.ndarray, a: float, b: float) -> np.ndarray:
 def dcc_gjrgarch(
     rm: np.ndarray,
     rf: np.ndarray,
+    market_label: str = "market",
+    firm_label: str = "firm",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Bivariate DCC-GJR-GARCH(1,1,1) with zero mean.
@@ -127,14 +137,57 @@ def dcc_gjrgarch(
     sf  : conditional volatility of firm   (std dev, decimal daily)
     rho : DCC conditional correlation ρ[t]
     """
-    hm  = _fit_gjrgarch(rm)
-    hf  = _fit_gjrgarch(rf)
+    hm  = _fit_gjrgarch(rm, market_label)
+    hf  = _fit_gjrgarch(rf, firm_label)
     sm  = np.sqrt(np.maximum(hm, 1e-12))
     sf  = np.sqrt(np.maximum(hf, 1e-12))
     eps = np.column_stack([rm / sm, rf / sf])
     a, b = _fit_dcc(eps)
     rho  = _dcc_path(eps, a, b)
     return sm, sf, rho
+
+
+def _quantile_regression(y: np.ndarray, x: np.ndarray, alpha: float) -> np.ndarray:
+    """
+    Iteratively reweighted least squares quantile regression.
+
+    Mirrors the solver used in the upstream MATLAB implementation.
+    """
+    y = np.asarray(y, dtype=float).reshape(-1)
+    x = np.asarray(x, dtype=float)
+    n = len(y)
+    if x.ndim == 1:
+        x = x.reshape(n, 1)
+
+    X = np.column_stack([np.ones(n), x])
+    X_star = X.copy()
+    beta = np.ones(X.shape[1], dtype=float)
+
+    diff = np.inf
+    i = 0
+    while diff > 1e-6 and i < 1000:
+        beta_prev = beta.copy()
+        Xt_star = X_star.T
+        lhs = Xt_star @ X
+        rhs = Xt_star @ y
+        try:
+            beta = np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            beta = np.linalg.lstsq(lhs, rhs, rcond=None)[0]
+
+        rsd = y - X @ beta
+        rsd[np.abs(rsd) < 1e-6] = 1e-6
+        neg = rsd < 0
+        pos = rsd > 0
+        rsd[neg] = alpha * rsd[neg]
+        rsd[pos] = (1.0 - alpha) * rsd[pos]
+        rsd = np.abs(rsd)
+
+        X_star = X / rsd[:, None]
+        diff = float(np.max(np.abs(beta - beta_prev)))
+        i += 1
+
+    return beta
 
 
 # ── CoVaR / ΔCoVaR ────────────────────────────────────────────────────────────
@@ -145,6 +198,7 @@ def compute_covar_dcovar(
     sm: np.ndarray,
     sf: np.ndarray,
     rho: np.ndarray,
+    state_vars: pd.DataFrame | None = None,
     alpha: float = 0.05,
 ) -> tuple[pd.Series, pd.Series]:
     """
@@ -171,14 +225,27 @@ def compute_covar_dcovar(
     rm_0 = rm - rm.mean()
     rf_0 = rf - rf.mean()
 
-    X = np.column_stack([np.ones(nmin), rf_0])
-    b = QuantReg(rm_0, X).fit(q=alpha, max_iter=500, p_tol=1e-5,
-                               verbose=False).params          # [b0, b1]
+    sv_v = None
+    if state_vars is not None and not state_vars.empty:
+        sv_df = state_vars.reindex(idx_out)
+        sv_df = sv_df.dropna(axis=1, how="all")
+        if not sv_df.empty:
+            sv_v = sv_df.to_numpy(dtype=float)
 
     c_firm = np.quantile(rf_0 / sf_v, alpha)                 # scalar, < 0
     var_i  = sf_v * c_firm                                   # time-varying, < 0
-    covar  = b[0] + b[1] * var_i                             # negative return
-    dcovar = b[1] * (var_i - np.median(rf_0))                # negative
+
+    if sv_v is None:
+        b = _quantile_regression(rm_0, rf_0, alpha)
+        covar = b[0] + b[1] * var_i
+    else:
+        b = _quantile_regression(rm_0[1:], np.column_stack([rf_0[1:], sv_v[:-1]]), alpha)
+        covar = b[0] + b[1] * var_i[1:]
+        for i in range(sv_v.shape[1]):
+            covar = covar + b[i + 2] * sv_v[:-1, i]
+        covar = np.concatenate([[covar[0]], covar])
+
+    dcovar = b[1] * (var_i - np.median(rf_0))
 
     covar_s  = pd.Series(-np.minimum(covar,  0.0), index=idx_out,
                          name=bank_returns.name)
@@ -232,7 +299,12 @@ def compute_mes_lrmes(
     x      = (rf_0 / sf_v - rho_v * u) / z_v
 
     # Silverman bandwidth on standardised market residuals
-    h_bw   = np.std(u) * (4.0 / (3.0 * nmin)) ** 0.2
+    u_std  = np.std(u, ddof=1) if nmin > 1 else 0.0
+    u_iqr  = stats.iqr(u, rng=(25, 75), scale=1.0)
+    r0_s   = min(u_std, u_iqr / 1.349) if u_iqr > 0 else u_std
+    h_bw   = r0_s * (4.0 / (3.0 * nmin)) ** 0.2
+    if not np.isfinite(h_bw) or h_bw <= 0:
+        h_bw = 1e-6
     f      = stats.norm.cdf((c_mkt / sm_v - u) / h_bw)
 
     sum_f  = f.sum()
@@ -331,6 +403,50 @@ def _save_dcc_cache(
     _to_df(rho_d).to_parquet(os.path.join(CACHE_DIR, "dcc_rho.parquet"))
 
 
+def update_dcc_cache_column(key: str, ticker: str, values: np.ndarray, index: pd.Index) -> None:
+    """Merge or create one DCC cache column without dropping non-overlapping dates."""
+    path = os.path.join(CACHE_DIR, f"{key}.parquet")
+    new_s = pd.Series(values, index=index, name=ticker)
+    if os.path.exists(path):
+        existing = pd.read_parquet(path)
+        combined_index = existing.index.union(index)
+        existing = existing.reindex(combined_index)
+        existing[ticker] = new_s.reindex(combined_index)
+        existing.to_parquet(path)
+    else:
+        pd.DataFrame({ticker: new_s}).to_parquet(path)
+
+
+def _cache_signature(
+    returns: pd.DataFrame,
+    market_cap_ts: pd.DataFrame,
+    lb_daily: pd.DataFrame | None,
+    lbr_daily: pd.DataFrame | None,
+    state_vars: pd.DataFrame | None,
+    alpha: float,
+    d: float,
+    car: float,
+) -> str:
+    payload = {
+        "returns_index_start": str(returns.index.min()) if not returns.empty else None,
+        "returns_index_end": str(returns.index.max()) if not returns.empty else None,
+        "returns_cols": sorted(map(str, returns.columns.tolist())),
+        "market_cap_cols": sorted(map(str, market_cap_ts.columns.tolist())) if market_cap_ts is not None else [],
+        "lb_cols": sorted(map(str, lb_daily.columns.tolist())) if lb_daily is not None else [],
+        "lbr_cols": sorted(map(str, lbr_daily.columns.tolist())) if lbr_daily is not None else [],
+        "state_cols": sorted(map(str, state_vars.columns.tolist())) if state_vars is not None else [],
+        "alpha": round(float(alpha), 8),
+        "d": round(float(d), 8),
+        "car": round(float(car), 8),
+        "version": 2,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _cache_meta_path() -> str:
+    return os.path.join(CACHE_DIR, "measures_meta.json")
+
+
 # ── Orchestration ──────────────────────────────────────────────────────────────
 
 def compute_all(
@@ -339,6 +455,7 @@ def compute_all(
     lb_daily: pd.DataFrame | None,
     lbr_daily: pd.DataFrame | None,
     balance_sheet: dict,
+    state_vars: pd.DataFrame | None = None,
     alpha: float = 0.05,
     d: float = D,
     car: float = CAR,
@@ -361,12 +478,21 @@ def compute_all(
              for k in measure_keys}
     dcc_paths = [os.path.join(CACHE_DIR, f"{k}.parquet")
                  for k in ("dcc_sm", "dcc_sf", "dcc_rho")]
+    meta_path = _cache_meta_path()
+    signature = _cache_signature(
+        returns, market_cap_ts, lb_daily, lbr_daily, state_vars, alpha, d, car
+    )
 
     all_cache = list(cache.values()) + dcc_paths
-    if not force_refresh and all(os.path.exists(p) for p in all_cache):
+    if not force_refresh and all(os.path.exists(p) for p in all_cache) and os.path.exists(meta_path):
         oldest = min(os.path.getmtime(p) for p in all_cache)
         age_h  = (pd.Timestamp.now().timestamp() - oldest) / 3600
-        if age_h < 12:
+        try:
+            with open(meta_path) as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {}
+        if age_h < 12 and meta.get("signature") == signature:
             print(f"  Loaded measures from cache ({age_h:.1f}h old)")
             return {k: pd.read_parquet(p) for k, p in cache.items()}
 
@@ -390,7 +516,7 @@ def compute_all(
         rf       = bank_ret.reindex(idx).values
 
         # DCC-GJR-GARCH
-        sm, sf, rho = dcc_gjrgarch(rm, rf)
+        sm, sf, rho = dcc_gjrgarch(rm, rf, market_label=MARKET_NAME, firm_label=ticker)
 
         nmin    = min(len(idx), len(sm))
         idx_out = idx[-nmin:]
@@ -401,7 +527,7 @@ def compute_all(
         idx_map[ticker] = idx_out
 
         covar_s, dcovar_s = compute_covar_dcovar(
-            bank_ret, mkt_ret, sm, sf, rho, alpha)
+            bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
         covar_d[ticker]  = covar_s
         dcovar_d[ticker] = dcovar_s
 
@@ -434,6 +560,8 @@ def compute_all(
         df.to_parquet(cache[k])
 
     _save_dcc_cache(sm_d, sf_d, rho_d, idx_map)
+    with open(meta_path, "w") as f:
+        json.dump({"signature": signature}, f)
     return result
 
 
@@ -445,6 +573,7 @@ def recompute_for_alpha(
     lb_daily: pd.DataFrame | None,
     lbr_daily: pd.DataFrame | None,
     balance_sheet: dict,
+    state_vars: pd.DataFrame | None = None,
     alpha: float = 0.05,
     d: float = D,
     car: float = CAR,
@@ -459,7 +588,7 @@ def recompute_for_alpha(
     if cached is None:
         return compute_all(
             returns, market_cap_ts, lb_daily, lbr_daily, balance_sheet,
-            alpha=alpha, d=d, car=car,
+            state_vars=state_vars, alpha=alpha, d=d, car=car,
         )
 
     dcc_sm, dcc_sf, dcc_rho = cached
@@ -481,9 +610,11 @@ def recompute_for_alpha(
         sm  = dcc_sm[ticker].dropna().values
         sf  = dcc_sf[ticker].dropna().values
         rho = dcc_rho[ticker].dropna().values
+        if len(sm) == 0 or len(sf) == 0 or len(rho) == 0:
+            continue
 
         covar_s, dcovar_s = compute_covar_dcovar(
-            bank_ret, mkt_ret, sm, sf, rho, alpha)
+            bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
         covar_d[ticker]  = covar_s
         dcovar_d[ticker] = dcovar_s
 

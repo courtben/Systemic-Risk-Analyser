@@ -11,8 +11,10 @@ from __future__ import annotations
 import os
 import json
 import warnings
+from io import StringIO
 import numpy as np
 import pandas as pd
+import requests
 import yfinance as yf
 from datetime import datetime, timedelta
 
@@ -64,6 +66,18 @@ MARKET_NAME   = "S&P 500"
 LOOKBACK_YEARS    = 5
 PRICE_CACHE_HOURS = 12
 BS_CACHE_DAYS     = 7
+
+SEPARATE_ACCOUNT_FACTOR = 0.40
+STATE_CACHE_DAYS = 7
+FRED_SERIES: dict[str, str] = {
+    "ffr": "FEDFUNDS",
+    "tbill_3m": "DTB3",
+    "credit_spread": "BAA10YM",
+    "liquidity_spread": "TEDRATE",
+    "yield_10y": "DGS10",
+    "yield_3m": "DGS3MO",
+    "vix": "VIXCLS",
+}
 
 
 def _default_start() -> str:
@@ -157,10 +171,42 @@ def _fetch_balance_sheet_one(ticker: str, name: str) -> dict:
                 if assets and equity:
                     total_liabilities = assets - equity
 
+        separate_accounts = None
+        if bs is not None and not bs.empty:
+            for key in [
+                "Separate Account Assets",
+                "Separate Account Business",
+                "Separate Accounts",
+            ]:
+                if key in bs.index:
+                    val = bs.loc[key].dropna()
+                    if not val.empty:
+                        separate_accounts = float(val.iloc[0])
+                        break
+
+        shares_ts = None
+        try:
+            shares_hist = t.get_shares_full(start=_default_start())
+            if shares_hist is not None and len(shares_hist) > 0:
+                shares_hist = shares_hist.dropna()
+                if len(shares_hist) > 0:
+                    shares_hist.index = pd.to_datetime(shares_hist.index)
+                    shares_hist = shares_hist.sort_index()
+                    shares_hist = shares_hist[~shares_hist.index.duplicated(keep="last")]
+                    shares_ts = {
+                        str(k): float(v)
+                        for k, v in shares_hist.items()
+                        if pd.notna(v)
+                    }
+        except Exception:
+            shares_ts = None
+
         return {
             "name":               name,
             "total_liabilities":  total_liabilities,
+            "separate_accounts":  separate_accounts,
             "shares_outstanding": info.get("sharesOutstanding"),
+            "shares_ts":          shares_ts,
             "market_cap":         info.get("marketCap"),
             "currency":           info.get("currency", "USD"),
         }
@@ -168,7 +214,9 @@ def _fetch_balance_sheet_one(ticker: str, name: str) -> dict:
         print(f"    Warning – {name}: {exc}")
         return {
             "name": name,
-            "total_liabilities": None, "shares_outstanding": None,
+            "total_liabilities": None, "separate_accounts": None,
+            "shares_outstanding": None,
+            "shares_ts": None,
             "market_cap": None, "currency": "USD",
         }
 
@@ -241,6 +289,34 @@ def _fetch_liab_series(t: yf.Ticker) -> pd.Series | None:
     return merged if not merged.empty else None
 
 
+def _fetch_separate_account_series(t: yf.Ticker) -> pd.Series | None:
+    """Extract separate-account quarterly series when available."""
+    keys = [
+        "Separate Account Assets",
+        "Separate Account Business",
+        "Separate Accounts",
+    ]
+    parts: list[pd.Series] = []
+    for bs in (t.quarterly_balance_sheet, t.balance_sheet):
+        if bs is None or bs.empty:
+            continue
+        for key in keys:
+            if key in bs.index:
+                parts.append(bs.loc[key].dropna())
+                break
+
+    if not parts:
+        return None
+
+    merged = pd.concat(parts)
+    merged.index = pd.to_datetime(merged.index)
+    merged = merged.sort_index()
+    merged = merged[~merged.index.duplicated(keep="first")]
+    cutoff = pd.Timestamp(_default_start())
+    merged = merged[merged.index >= cutoff - pd.DateOffset(years=1)]
+    return merged if not merged.empty else None
+
+
 def get_liabilities_ts(force_refresh: bool = False) -> pd.DataFrame:
     """
     Quarterly total-liabilities time series for all US banks (5-year window).
@@ -274,9 +350,113 @@ def get_liabilities_ts(force_refresh: bool = False) -> pd.DataFrame:
     return df
 
 
+def get_separate_accounts_ts(force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Quarterly separate-account history where reported.
+
+    Mostly relevant for insurers; many banks will have no data and are omitted.
+    """
+    path = os.path.join(CACHE_DIR, "separate_accounts_ts.parquet")
+    if not force_refresh and os.path.exists(path):
+        age_d = (datetime.now().timestamp() - os.path.getmtime(path)) / 86400
+        if age_d < BS_CACHE_DAYS:
+            df = pd.read_parquet(path)
+            print(f"  Loaded separate-accounts time series from cache ({age_d:.1f}d old)")
+            return df
+
+    print("  Fetching separate-account history ...")
+    records: dict[str, pd.Series] = {}
+    for ticker, name in ALL_BANKS.items():
+        try:
+            s = _fetch_separate_account_series(yf.Ticker(ticker))
+            if s is not None:
+                records[ticker] = s
+        except Exception as exc:
+            print(f"    Warning – {name}: {exc}")
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records).sort_index()
+    df.to_parquet(path)
+    return df
+
+
+def _fred_series(code: str, start: str) -> pd.Series:
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={code}&cosd={start}"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_csv(StringIO(resp.text))
+    # FRED changed column name from "DATE" to "observation_date" — detect dynamically
+    cols = df.columns.tolist()
+    date_col = next((c for c in cols if "date" in c.lower()), None)
+    val_col  = next((c for c in cols if c != date_col), None)
+    if date_col is None or val_col is None:
+        raise ValueError(f"Unexpected FRED CSV columns: {cols}")
+    s = pd.to_numeric(df[val_col], errors="coerce")
+    s.index = pd.to_datetime(df[date_col])
+    return s.dropna().rename(code)
+
+
+def get_state_variables(prices: pd.DataFrame, force_refresh: bool = False) -> pd.DataFrame:
+    """
+    Daily systemic state variables aligned to the price index.
+
+    Uses a compact subset of the variables used in the original framework,
+    sourced from FRED and Yahoo Finance.
+    """
+    path = os.path.join(CACHE_DIR, "state_variables.parquet")
+    if not force_refresh and os.path.exists(path):
+        age_d = (datetime.now().timestamp() - os.path.getmtime(path)) / 86400
+        if age_d < STATE_CACHE_DAYS:
+            df = pd.read_parquet(path)
+            df.index = pd.to_datetime(df.index)
+            return df.reindex(prices.index).ffill().bfill()
+
+    start = _default_start()
+    state: dict[str, pd.Series] = {}
+    for name, code in FRED_SERIES.items():
+        try:
+            state[name] = _fred_series(code, start)
+        except Exception as exc:
+            print(f"  Warning – FRED {code}: {exc}")
+
+    try:
+        vix = yf.download("^VIX", start=start, end=datetime.today().strftime("%Y-%m-%d"),
+                          auto_adjust=True, progress=False)
+        if not vix.empty:
+            close = vix["Close"]
+            # Flatten MultiIndex (ticker, price) → plain Series
+            if isinstance(close, pd.DataFrame):
+                close = close.iloc[:, 0]
+            state["vix_market"] = close.squeeze().astype(float)
+    except Exception as exc:
+        print(f"  Warning – VIX: {exc}")
+
+    if not state:
+        return pd.DataFrame(index=prices.index)
+
+    state_df = pd.DataFrame(state).sort_index()
+    if state_df.empty:
+        return pd.DataFrame(index=prices.index)
+
+    if {"yield_10y", "yield_3m"} <= set(state_df.columns):
+        state_df["yield_spread"] = state_df["yield_10y"] - state_df["yield_3m"]
+
+    if MARKET_NAME in prices.columns:
+        market_rets = compute_returns(prices[[MARKET_NAME]])[MARKET_NAME]
+        state_df["market_excess_proxy"] = market_rets.reindex(state_df.index).ffill()
+
+    state_df = state_df.reindex(prices.index).ffill().bfill()
+    state_df.to_parquet(path)
+    return state_df
+
+
 def build_lb_daily(
     liab_ts: pd.DataFrame,
     prices: pd.DataFrame,
+    separate_accounts_ts: pd.DataFrame | None = None,
+    sf: float = SEPARATE_ACCOUNT_FACTOR,
 ) -> pd.DataFrame:
     """
     Align quarterly liabilities to the daily price index.
@@ -284,6 +464,18 @@ def build_lb_daily(
     Forward-fill between reporting dates; back-fill before first filing.
     """
     daily_idx = prices.index
+    sa_daily: dict[str, pd.Series] = {}
+    if separate_accounts_ts is not None and not separate_accounts_ts.empty:
+        for ticker in separate_accounts_ts.columns:
+            if ticker not in prices.columns:
+                continue
+            s = separate_accounts_ts[ticker].dropna()
+            if s.empty:
+                continue
+            combined = s.reindex(s.index.union(daily_idx)).sort_index()
+            combined = combined.ffill().bfill()
+            sa_daily[ticker] = combined.reindex(daily_idx)
+
     result: dict[str, pd.Series] = {}
     for ticker in liab_ts.columns:
         if ticker not in prices.columns:
@@ -293,34 +485,54 @@ def build_lb_daily(
             continue
         combined = s.reindex(s.index.union(daily_idx)).sort_index()
         combined = combined.ffill().bfill()
-        result[ticker] = combined.reindex(daily_idx)
+        series = combined.reindex(daily_idx)
+        if ticker in sa_daily:
+            series = series - ((1.0 - sf) * sa_daily[ticker])
+        result[ticker] = series
     return pd.DataFrame(result)
 
 
 def build_lbr_daily(
     liab_ts: pd.DataFrame,
     prices: pd.DataFrame,
+    separate_accounts_ts: pd.DataFrame | None = None,
+    sf: float = SEPARATE_ACCOUNT_FACTOR,
     fr: int = 3,
 ) -> pd.DataFrame:
     """
-    Forward-rolled liabilities: sample every fr months, hold constant between.
+    Forward-rolled liabilities using the MATLAB forward_roll_data.m logic.
 
-    Follows forward_roll_data.m from TommasoBelluzzo/SystemicRisk.
+    The original workflow rolls an already-daily liability series forward across
+    observed month buckets, rather than resampling filings to synthetic monthly
+    points first.
     """
+    if fr == 0:
+        return build_lb_daily(liab_ts, prices, separate_accounts_ts=separate_accounts_ts, sf=sf)
+
     daily_idx = prices.index
+    lb_daily = build_lb_daily(liab_ts, prices, separate_accounts_ts=separate_accounts_ts, sf=sf)
     result: dict[str, pd.Series] = {}
-    for ticker in liab_ts.columns:
+    month_keys = daily_idx.to_period("M")
+    first_mask = np.r_[True, month_keys[1:] != month_keys[:-1]]
+    first_idx = np.flatnonzero(first_mask)
+
+    if len(first_idx) == 0:
+        return pd.DataFrame(index=daily_idx)
+
+    seq_starts = first_idx[::fr]
+    segment_ends = np.concatenate([seq_starts[1:] - 1, [len(daily_idx) - 1]])
+
+    for ticker in lb_daily.columns:
         if ticker not in prices.columns:
             continue
-        s = liab_ts[ticker].dropna()
-        if s.empty:
+        values = lb_daily[ticker].to_numpy(dtype=float)
+        if len(values) != len(daily_idx):
             continue
-        monthly  = s.resample("MS").first()
-        rolled   = monthly.iloc[::fr]
-        combined = rolled.reindex(rolled.index.union(daily_idx)).sort_index()
-        combined = combined.ffill().bfill()
-        result[ticker] = combined.reindex(daily_idx)
-    return pd.DataFrame(result)
+        rolled = np.full(len(daily_idx), np.nan, dtype=float)
+        for start, end in zip(seq_starts, segment_ends):
+            rolled[start : end + 1] = values[start]
+        result[ticker] = pd.Series(rolled, index=daily_idx)
+    return pd.DataFrame(result, index=daily_idx)
 
 
 def fetch_single_bank(ticker: str) -> dict | None:
@@ -350,6 +562,7 @@ def fetch_single_bank(ticker: str) -> dict | None:
 
         bs_data = _fetch_balance_sheet_one(ticker, name)
         liab_ts = _fetch_liab_series(t)
+        sa_ts = _fetch_separate_account_series(t)
 
         return {
             "ticker":        ticker,
@@ -357,6 +570,7 @@ def fetch_single_bank(ticker: str) -> dict | None:
             "prices":        prices,
             "balance_sheet": bs_data,
             "liab_ts":       liab_ts,
+            "separate_accounts_ts": sa_ts,
         }
 
     except Exception as exc:
@@ -371,8 +585,10 @@ def build_market_cap_series(
     balance_sheet: dict,
 ) -> pd.DataFrame:
     """
-    Approximate daily market cap = price × shares_outstanding.
-    Constant shares outstanding is a standard simplification.
+    Daily market cap = price × shares outstanding.
+
+    Prefers time-varying share-count history when available and falls back to a
+    constant shares-outstanding snapshot otherwise.
     """
     caps = {}
     for ticker in list(ALL_BANKS.keys()) + [
@@ -380,7 +596,28 @@ def build_market_cap_series(
     ]:
         if ticker not in prices.columns:
             continue
-        shares = balance_sheet.get(ticker, {}).get("shares_outstanding")
-        if shares:
-            caps[ticker] = prices[ticker] * shares
+        meta = balance_sheet.get(ticker, {})
+        shares_series = None
+
+        raw_shares_ts = meta.get("shares_ts")
+        if isinstance(raw_shares_ts, dict) and raw_shares_ts:
+            try:
+                shares_series = pd.Series(raw_shares_ts, dtype=float)
+                shares_series.index = pd.to_datetime(shares_series.index)
+                shares_series = shares_series.sort_index()
+                shares_series = shares_series[~shares_series.index.duplicated(keep="last")]
+                shares_series = shares_series.reindex(
+                    shares_series.index.union(prices.index)
+                ).sort_index().ffill().bfill()
+                shares_series = shares_series.reindex(prices.index)
+            except Exception:
+                shares_series = None
+
+        if shares_series is None:
+            shares = meta.get("shares_outstanding")
+            if shares:
+                shares_series = pd.Series(float(shares), index=prices.index)
+
+        if shares_series is not None:
+            caps[ticker] = prices[ticker] * shares_series
     return pd.DataFrame(caps)
