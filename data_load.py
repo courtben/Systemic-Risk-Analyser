@@ -69,14 +69,19 @@ BS_CACHE_DAYS     = 7
 
 SEPARATE_ACCOUNT_FACTOR = 0.40
 STATE_CACHE_DAYS = 7
+
+# BAA10YM (Moody's BAA minus 10-Year Treasury) has no yfinance equivalent — FRED only
 FRED_SERIES: dict[str, str] = {
-    "ffr": "FEDFUNDS",
-    "tbill_3m": "DTB3",
     "credit_spread": "BAA10YM",
-    "liquidity_spread": "TEDRATE",
-    "yield_10y": "DGS10",
-    "yield_3m": "DGS3MO",
-    "vix": "VIXCLS",
+}
+
+# Rate / yield tickers available directly from Yahoo Finance (daily, no API key)
+# ZQ=F: 30-Day Fed Funds futures — implied rate = 100 − price
+YF_RATE_TICKERS: dict[str, str] = {
+    "ffr":       "ZQ=F",   # 30-Day Fed Funds Futures → 100 − price ≈ effective FFR
+    "yield_10y": "^TNX",   # 10-Year Treasury Note Yield (%)
+    "yield_3m":  "^IRX",   # 13-Week T-Bill Rate (%) — proxy for 3-month yield
+    "vix":       "^VIX",   # CBOE Volatility Index
 }
 
 
@@ -402,8 +407,9 @@ def get_state_variables(prices: pd.DataFrame, force_refresh: bool = False) -> pd
     """
     Daily systemic state variables aligned to the price index.
 
-    Uses a compact subset of the variables used in the original framework,
-    sourced from FRED and Yahoo Finance.
+    Rate / yield variables (VIX, 10Y yield, 3M T-bill, FFR) are sourced from
+    Yahoo Finance via a single batch download.  Only the BAA credit spread,
+    which has no yfinance equivalent, is still fetched from FRED.
     """
     path = os.path.join(CACHE_DIR, "state_variables.parquet")
     if not force_refresh and os.path.exists(path):
@@ -414,24 +420,35 @@ def get_state_variables(prices: pd.DataFrame, force_refresh: bool = False) -> pd
             return df.reindex(prices.index).ffill().bfill()
 
     start = _default_start()
+    end   = datetime.today().strftime("%Y-%m-%d")
     state: dict[str, pd.Series] = {}
+
+    # ── yfinance: rates / yields (single batch download) ──────────────────────
+    print("  Fetching rate/yield state variables from Yahoo Finance ...")
+    try:
+        raw = yf.download(
+            list(YF_RATE_TICKERS.values()),
+            start=start, end=end,
+            auto_adjust=True, progress=False,
+        )
+        close = raw["Close"] if isinstance(raw.columns, pd.MultiIndex) else raw
+        for name, ticker in YF_RATE_TICKERS.items():
+            if ticker not in close.columns:
+                print(f"  Warning – {ticker} not in download result")
+                continue
+            s = close[ticker].dropna().astype(float)
+            if name == "ffr":
+                s = 100.0 - s   # futures price → implied rate (%)
+            state[name] = s.rename(name)
+    except Exception as exc:
+        print(f"  Warning – yfinance rate download failed: {exc}")
+
+    # ── FRED: credit spread only (BAA10YM — no yfinance equivalent) ───────────
     for name, code in FRED_SERIES.items():
         try:
             state[name] = _fred_series(code, start)
         except Exception as exc:
             print(f"  Warning – FRED {code}: {exc}")
-
-    try:
-        vix = yf.download("^VIX", start=start, end=datetime.today().strftime("%Y-%m-%d"),
-                          auto_adjust=True, progress=False)
-        if not vix.empty:
-            close = vix["Close"]
-            # Flatten MultiIndex (ticker, price) → plain Series
-            if isinstance(close, pd.DataFrame):
-                close = close.iloc[:, 0]
-            state["vix_market"] = close.squeeze().astype(float)
-    except Exception as exc:
-        print(f"  Warning – VIX: {exc}")
 
     if not state:
         return pd.DataFrame(index=prices.index)
