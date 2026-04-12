@@ -7,4 +7,5 @@ yfinance>=0.2.40
 statsmodels>=0.14.0
 pyarrow>=14.0.0
 scipy>=1.11.0
+arch>=5.0.0
 gunicorn>=21.2.0
