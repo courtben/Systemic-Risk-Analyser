@@ -5,7 +5,30 @@
       "WebFetch(domain:api.github.com)",
       "Bash(gh api:*)",
       "Bash(python -c ':*)",
-      "Bash('C:\\\\Users\\\\benjc\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe' -c ':*)"
+      "Bash('C:\\\\Users\\\\benjc\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python310\\\\python.exe' -c ':*)",
+      "WebFetch(domain:vlab.stern.nyu.edu)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('systemic_measures.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('systemic_measures.py',encoding='utf-8'\\).read\\(\\)\\); print\\('SYNTAX OK'\\)\")",
+      "Bash(python -c \"import ast, sys; [ast.parse\\(open\\(f, encoding='utf-8'\\).read\\(\\), filename=f\\) for f in \\('app.py','data_load.py','systemic_measures.py'\\)]; print\\('AST parse OK'\\)\")",
+      "Bash(python -m py_compile app.py charts.py data_load.py systemic_measures.py)",
+      "Bash(python app.py)",
+      "Read(//c/Users/benjc/OneDrive/Benjamin/Schule/ZHAW/Master/2. FS 26/REP/Systemic-Risk-Analyser/**)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(/c/Users/benjc/anaconda3/python.exe -c \"import dash; print\\('dash', dash.__version__\\)\")",
+      "Bash(./.venv/Scripts/python.exe -c \"import dash, dash_bootstrap_components; print\\('dash', dash.__version__\\)\")",
+      "Bash(./.venv/Scripts/python.exe app.py)",
+      "Bash(taskkill //F //IM python.exe)",
+      "Bash(./.venv/Scripts/python.exe -c ':*)",
+      "Bash(./.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('charts.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('data_load.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://127.0.0.1:8050/ --max-time 5)",
+      "Bash(curl -s http://127.0.0.1:8050/_dash-layout)",
+      "Bash(curl -s -X POST http://127.0.0.1:8050/_dash-update-component -H 'Content-Type: application/json' -d '{\"output\":\"..kpi-mes.children...kpi-lrmes.children...kpi-ses.children...kpi-covar.children...kpi-srisk.children...kpi-lvg.children...chart-ranking.figure...chart-ses-ranking.figure...chart-covar-ranking.figure...chart-mes-dw.figure...chart-srisk-dw.figure...chart-covar-dw.figure...risk-table-container.children..\",\"outputs\":[{\"id\":\"kpi-mes\",\"property\":\"children\"},{\"id\":\"kpi-lrmes\",\"property\":\"children\"},{\"id\":\"kpi-ses\",\"property\":\"children\"},{\"id\":\"kpi-covar\",\"property\":\"children\"},{\"id\":\"kpi-srisk\",\"property\":\"children\"},{\"id\":\"kpi-lvg\",\"property\":\"children\"},{\"id\":\"chart-ranking\",\"property\":\"figure\"},{\"id\":\"chart-ses-ranking\",\"property\":\"figure\"},{\"id\":\"chart-covar-ranking\",\"property\":\"figure\"},{\"id\":\"chart-mes-dw\",\"property\":\"figure\"},{\"id\":\"chart-srisk-dw\",\"property\":\"figure\"},{\"id\":\"chart-covar-dw\",\"property\":\"figure\"},{\"id\":\"risk-table-container\",\"property\":\"children\"}],\"changedPropIds\":[\"refresh-store.data\"],\"inputs\":[{\"id\":\"refresh-store\",\"property\":\"data\",\"value\":0},{\"id\":\"alpha-store\",\"property\":\"data\",\"value\":0.05}]}' -w '\\\\nHTTP %{http_code}\\\\n' -o /tmp/overview-resp.json --max-time 30)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); print\\('app.py OK'\\)\")",
+      "Bash(powershell -Command '\\(Get-NetTCPConnection -LocalPort 8050 -ErrorAction SilentlyContinue\\).OwningProcess | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue; Write-Host killed $_ }')",
+      "Bash(curl -s http://127.0.0.1:8050/_dash-dependencies)",
+      "Bash(./.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('charts.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(./.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('app.py',encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

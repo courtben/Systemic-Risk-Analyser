@@ -470,10 +470,10 @@ def compute_all(
 
     Returns
     -------
-    dict with keys 'mes', 'ses', 'covar', 'delta_covar', 'srisk'.
+    dict with keys 'mes', 'lrmes', 'ses', 'covar', 'delta_covar', 'srisk'.
     Each value is a pd.DataFrame with bank tickers as columns.
     """
-    measure_keys = ("mes", "ses", "covar", "delta_covar", "srisk")
+    measure_keys = ("mes", "lrmes", "ses", "covar", "delta_covar", "srisk")
     cache = {k: os.path.join(CACHE_DIR, f"measures_{k}.parquet")
              for k in measure_keys}
     dcc_paths = [os.path.join(CACHE_DIR, f"{k}.parquet")
@@ -503,54 +503,66 @@ def compute_all(
                      ["SMI", "S&P 500", "Market"])].iloc[:, 0])
     bank_cols = [c for c in returns.columns if c in ALL_BANKS]
 
-    mes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}
+    mes_d, lrmes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}, {}
     sm_d, sf_d, rho_d, idx_map = {}, {}, {}, {}
 
+    failed = []
     for ticker in bank_cols:
         name = ALL_BANKS.get(ticker, ticker)
         print(f"  {name} ({ticker}) ...")
+        try:
+            bank_ret = returns[ticker].dropna()
+            if len(bank_ret) < 50:
+                raise ValueError(f"insufficient return history ({len(bank_ret)} obs)")
+            idx      = bank_ret.index.intersection(mkt_ret.index)
+            rm       = mkt_ret.reindex(idx).values
+            rf       = bank_ret.reindex(idx).values
 
-        bank_ret = returns[ticker].dropna()
-        idx      = bank_ret.index.intersection(mkt_ret.index)
-        rm       = mkt_ret.reindex(idx).values
-        rf       = bank_ret.reindex(idx).values
+            # DCC-GJR-GARCH
+            sm, sf, rho = dcc_gjrgarch(rm, rf, market_label=MARKET_NAME, firm_label=ticker)
 
-        # DCC-GJR-GARCH
-        sm, sf, rho = dcc_gjrgarch(rm, rf, market_label=MARKET_NAME, firm_label=ticker)
+            nmin    = min(len(idx), len(sm))
+            idx_out = idx[-nmin:]
 
-        nmin    = min(len(idx), len(sm))
-        idx_out = idx[-nmin:]
+            sm_d[ticker]  = sm[-nmin:]
+            sf_d[ticker]  = sf[-nmin:]
+            rho_d[ticker] = rho[-nmin:]
+            idx_map[ticker] = idx_out
 
-        sm_d[ticker]  = sm[-nmin:]
-        sf_d[ticker]  = sf[-nmin:]
-        rho_d[ticker] = rho[-nmin:]
-        idx_map[ticker] = idx_out
+            covar_s, dcovar_s = compute_covar_dcovar(
+                bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
+            covar_d[ticker]  = covar_s
+            dcovar_d[ticker] = dcovar_s
 
-        covar_s, dcovar_s = compute_covar_dcovar(
-            bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
-        covar_d[ticker]  = covar_s
-        dcovar_d[ticker] = dcovar_s
+            mes_s, lrmes_s = compute_mes_lrmes(
+                bank_ret, mkt_ret, sm, sf, rho, alpha, d)
+            mes_d[ticker]   = mes_s
+            lrmes_d[ticker] = lrmes_s
 
-        mes_s, lrmes_s = compute_mes_lrmes(
-            bank_ret, mkt_ret, sm, sf, rho, alpha, d)
-        mes_d[ticker] = mes_s
+            cp_ts  = market_cap_ts.get(ticker)
+            lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
+            lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
 
-        cp_ts  = market_cap_ts.get(ticker)
-        lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
-        lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
+            if cp_ts is not None and lb_ts is not None:
+                ses_d[ticker]   = compute_ses(lb_ts, cp_ts, car)
+            else:
+                ses_d[ticker]   = pd.Series(np.nan, index=mes_s.index)
 
-        if cp_ts is not None and lb_ts is not None:
-            ses_d[ticker]   = compute_ses(lb_ts, cp_ts, car)
-        else:
-            ses_d[ticker]   = pd.Series(np.nan, index=mes_s.index)
-
-        if cp_ts is not None and lbr_ts is not None:
-            srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
-        else:
-            srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+            if cp_ts is not None and lbr_ts is not None:
+                srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
+            else:
+                srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+        except Exception as exc:
+            failed.append((ticker, str(exc)))
+            print(f"    Warning: {name} ({ticker}) compute failed — {type(exc).__name__}: {exc}")
+            continue
+    if failed:
+        print(f"  {len(failed)} bank(s) skipped in DCC fit: "
+              + ", ".join(f"{t}" for t, _ in failed))
 
     result = {
         "mes":         pd.DataFrame(mes_d),
+        "lrmes":       pd.DataFrame(lrmes_d),
         "ses":         pd.DataFrame(ses_d),
         "covar":       pd.DataFrame(covar_d),
         "delta_covar": pd.DataFrame(dcovar_d),
@@ -600,44 +612,49 @@ def recompute_for_alpha(
                      ["SMI", "S&P 500", "Market"])].iloc[:, 0])
     bank_cols = [c for c in returns.columns if c in ALL_BANKS]
 
-    mes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}
+    mes_d, lrmes_d, ses_d, covar_d, dcovar_d, srisk_d = {}, {}, {}, {}, {}, {}
 
     for ticker in bank_cols:
         if ticker not in dcc_sm.columns:
             continue
+        try:
+            bank_ret = returns[ticker].dropna()
+            sm  = dcc_sm[ticker].dropna().values
+            sf  = dcc_sf[ticker].dropna().values
+            rho = dcc_rho[ticker].dropna().values
+            if len(sm) == 0 or len(sf) == 0 or len(rho) == 0:
+                continue
 
-        bank_ret = returns[ticker].dropna()
-        sm  = dcc_sm[ticker].dropna().values
-        sf  = dcc_sf[ticker].dropna().values
-        rho = dcc_rho[ticker].dropna().values
-        if len(sm) == 0 or len(sf) == 0 or len(rho) == 0:
+            covar_s, dcovar_s = compute_covar_dcovar(
+                bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
+            covar_d[ticker]  = covar_s
+            dcovar_d[ticker] = dcovar_s
+
+            mes_s, lrmes_s = compute_mes_lrmes(
+                bank_ret, mkt_ret, sm, sf, rho, alpha, d)
+            mes_d[ticker]   = mes_s
+            lrmes_d[ticker] = lrmes_s
+
+            cp_ts  = market_cap_ts.get(ticker)
+            lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
+            lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
+
+            if cp_ts is not None and lb_ts is not None:
+                ses_d[ticker] = compute_ses(lb_ts, cp_ts, car)
+            else:
+                ses_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+
+            if cp_ts is not None and lbr_ts is not None:
+                srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
+            else:
+                srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
+        except Exception as exc:
+            print(f"    Warning: recompute for {ticker} failed — {type(exc).__name__}: {exc}")
             continue
-
-        covar_s, dcovar_s = compute_covar_dcovar(
-            bank_ret, mkt_ret, sm, sf, rho, state_vars=state_vars, alpha=alpha)
-        covar_d[ticker]  = covar_s
-        dcovar_d[ticker] = dcovar_s
-
-        mes_s, lrmes_s = compute_mes_lrmes(
-            bank_ret, mkt_ret, sm, sf, rho, alpha, d)
-        mes_d[ticker] = mes_s
-
-        cp_ts  = market_cap_ts.get(ticker)
-        lb_ts  = lb_daily.get(ticker)  if lb_daily  is not None else None
-        lbr_ts = lbr_daily.get(ticker) if lbr_daily is not None else None
-
-        if cp_ts is not None and lb_ts is not None:
-            ses_d[ticker] = compute_ses(lb_ts, cp_ts, car)
-        else:
-            ses_d[ticker] = pd.Series(np.nan, index=mes_s.index)
-
-        if cp_ts is not None and lbr_ts is not None:
-            srisk_d[ticker] = compute_srisk(lrmes_s, lbr_ts, cp_ts, car)
-        else:
-            srisk_d[ticker] = pd.Series(np.nan, index=mes_s.index)
 
     return {
         "mes":         pd.DataFrame(mes_d),
+        "lrmes":       pd.DataFrame(lrmes_d),
         "ses":         pd.DataFrame(ses_d),
         "covar":       pd.DataFrame(covar_d),
         "delta_covar": pd.DataFrame(dcovar_d),

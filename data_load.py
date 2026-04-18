@@ -1,7 +1,8 @@
 """
 Data fetching and caching for the Systemic Risk Dashboard.
 
-Covers major US banking institutions.
+Covers major US banking institutions — banks only
+(no insurers, asset managers, or non-BHC broker-dealers).
 Prices sourced from Yahoo Finance via yfinance.
 Market benchmark: S&P 500 (^GSPC).
 Rolling window: 5 years of daily data.
@@ -25,14 +26,37 @@ warnings.filterwarnings("ignore")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Universe: banks only (bank holding companies, custody banks, investment banks).
+# Explicitly excluded: insurers, pure asset managers, broker-dealers that are
+# not BHCs, alt-asset managers, payment processors.
 BANKS_BY_COUNTRY: dict[str, dict[str, str]] = {
     "US": {
-        "JPM": "JPMorgan Chase",
-        "BAC": "Bank of America",
-        "GS":  "Goldman Sachs",
-        "WFC": "Wells Fargo",
-        "C":   "Citigroup",
-        "MS":  "Morgan Stanley",
+        # Money-center / Big 4
+        "JPM":  "JPMorgan Chase",
+        "BAC":  "Bank of America",
+        "C":    "Citigroup",
+        "WFC":  "Wells Fargo",
+        # Investment banks (BHCs since 2008)
+        "GS":   "Goldman Sachs",
+        "MS":   "Morgan Stanley",
+        # Super-regional / national
+        "USB":  "U.S. Bancorp",
+        "PNC":  "PNC Financial",
+        "TFC":  "Truist Financial",
+        "COF":  "Capital One Financial",
+        # Trust & custody banks
+        "BK":   "BNY Mellon",
+        "STT":  "State Street",
+        "NTRS": "Northern Trust",
+        # Regional banks
+        "FITB": "Fifth Third Bancorp",
+        "KEY":  "KeyCorp",
+        "CFG":  "Citizens Financial",
+        "RF":   "Regions Financial",
+        "HBAN": "Huntington Bancshares",
+        "MTB":  "M&T Bank",
+        "CMA":  "Comerica",
+        "ZION": "Zions Bancorporation",
     },
 }
 
@@ -43,19 +67,29 @@ ALL_BANKS: dict[str, str] = {
     for ticker, name in banks.items()
 }
 
+# Auto-generate a distinct color per ticker from a diverse Material-style palette
+_BANK_COLOR_PALETTE: list[str] = [
+    "#0d47a1", "#c62828", "#37474f", "#f57f17", "#00838f", "#33691e",
+    "#4a148c", "#bf360c", "#1a237e", "#b71c1c", "#1b5e20", "#e65100",
+    "#311b92", "#263238", "#004d40", "#6a1b9a", "#827717", "#880e4f",
+    "#01579b", "#3e2723", "#0d5302", "#4e342e", "#1e88e5", "#d81b60",
+    "#43a047", "#fb8c00", "#5e35b1", "#00acc1", "#e53935", "#7cb342",
+]
+
 BANK_COLORS: dict[str, str] = {
-    "JPM": "#0d47a1",
-    "BAC": "#c62828",
-    "GS":  "#37474f",
-    "WFC": "#f57f17",
-    "C":   "#00838f",
-    "MS":  "#33691e",
+    ticker: _BANK_COLOR_PALETTE[i % len(_BANK_COLOR_PALETTE)]
+    for i, ticker in enumerate(ALL_BANKS)
 }
 
 BANK_COUNTRY: dict[str, str] = {
     ticker: country
     for country, banks in BANKS_BY_COUNTRY.items()
     for ticker in banks
+}
+
+# Human-readable country / region labels (shown in the UI)
+COUNTRY_LABELS: dict[str, str] = {
+    "US": "United States",
 }
 
 # Primary market benchmark
@@ -94,7 +128,7 @@ def _default_start() -> str:
 
 def _download_prices(start: str, end: str) -> pd.DataFrame:
     all_tickers = list(ALL_BANKS.keys()) + [MARKET_TICKER]
-    print(f"  Downloading prices {start} to {end} for {len(ALL_BANKS)} US banks ...")
+    print(f"  Downloading prices {start} to {end} for {len(ALL_BANKS)} banks ...")
     raw = yf.download(
         all_tickers, start=start, end=end,
         auto_adjust=True, progress=False,
