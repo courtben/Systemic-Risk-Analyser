@@ -1,5 +1,6 @@
 # cached data (rebuilt automatically on first run)
 cache/
+.claude/
 
 # Python
 __pycache__/
