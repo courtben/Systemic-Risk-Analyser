@@ -146,7 +146,7 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
     if s.empty:
         return go.Figure().update_layout(title=f"{title} — no data", **base_layout())
     s = s.reindex(s.abs().sort_values(ascending=False).index)
-    labels = [name_for(t) for t in s.index]
+    labels = [f"{name_for(t)} ({t})" for t in s.index]
     xvals  = s.values / 1e9 if divide_bn else s.values
     colors = ["#c62828" if v > 0 else "#2e7d32" for v in s.values]
     if divide_bn:
@@ -163,12 +163,14 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
-    base["margin"] = dict(l=10, r=90, t=45, b=30)
+    longest = max((len(lab) for lab in labels), default=10)
+    left_margin = max(120, min(220, int(7.0 * longest)))
+    base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
         title=dict(text=title, font=dict(size=14)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed"),
-        height=300,
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        height=320,
         **base,
     )
     fig.add_vline(x=0, line_width=1, line_color="#aaa")
@@ -179,7 +181,9 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
                 fmt_fn=fmt_pct) -> go.Figure:
     s      = series.dropna().sort_values(ascending=False)
     colors = [color_for(t) for t in s.index]
-    labels = [name_for(t) for t in s.index]
+    # Compose "Bank Name (TICKER)" labels so users see both the readable
+    # name and the symbol used for filtering / API calls.
+    labels = [f"{name_for(t)} ({t})" for t in s.index]
     text   = [fmt_fn(v) for v in s.values]
     # Scale to billions for bn-formatted charts so x-axis is readable
     xvals  = s.values / 1e9 if fmt_fn is fmt_bn else s.values
@@ -194,12 +198,16 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
-    base["margin"] = dict(l=10, r=90, t=45, b=30)
+    # Dynamic left margin based on the longest label so names don't clip
+    # at narrower column widths (overview has 3 charts side-by-side).
+    longest = max((len(lab) for lab in labels), default=10)
+    left_margin = max(120, min(220, int(7.0 * longest)))
+    base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
         title=dict(text=title, font=dict(size=14)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed"),
-        height=300,
+        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        height=320,
         **base,
     )
     return fig
@@ -572,7 +580,7 @@ def corr_heatmap(returns: pd.DataFrame) -> go.Figure:
             autorange="reversed",
             showgrid=False,
         ),
-        height=820,
+        height=650,
         **base_layout(),
     )
     fig.update_layout(margin=dict(l=10, r=60, t=55, b=120))
@@ -591,7 +599,7 @@ def market_dcc_chart(
     fig = make_subplots(
         rows=3, cols=1,
         shared_xaxes=True,
-        row_heights=[0.38, 0.38, 0.24],
+        row_heights=[0.40, 0.35, 0.25],
         vertical_spacing=0.05,
         subplot_titles=[
             "Rebased Price (100 = period start)",
@@ -714,10 +722,10 @@ def market_dcc_chart(
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     xanchor="right", x=1, font_size=11),
-        height=820,
+        height=650,
         **base_layout(),
     )
-    fig.update_layout(margin=dict(l=10, r=10, t=80, b=30))
+    fig.update_layout(margin=dict(l=10, r=10, t=70, b=30))
     return fig
 
 
@@ -745,17 +753,51 @@ def return_hist(returns: pd.DataFrame, tickers: list) -> go.Figure:
 
 # ── KPI card ──────────────────────────────────────────────────────────────────
 
-def kpi_card(title: str, value: str, subtitle: str, accent: str) -> dbc.Card:
+def kpi_card(title: str, value: str, subtitle: str, accent: str,
+             delta_text: str | None = None,
+             delta_direction: str = "neutral") -> dbc.Card:
+    """KPI card with an optional 7-day delta badge.
+
+    delta_direction ∈ {"up", "down", "neutral"} controls colour:
+      up   → red    (worsening for risk measures)
+      down → green  (improving)
+      neutral → grey
+    """
+    badge_colour = {"up": "#c62828", "down": "#2e7d32",
+                    "neutral": "#6c757d"}.get(delta_direction, "#6c757d")
+    badge_arrow  = {"up": "▲ ", "down": "▼ ", "neutral": "◆ "}.get(
+        delta_direction, "")
+
+    body_children = [
+        html.P(title, className="mb-1 text-muted",
+               style={"fontSize": "0.78rem", "fontWeight": "600",
+                      "letterSpacing": "0.05em", "textTransform": "uppercase"}),
+        html.H4(value, style={"color": accent, "fontWeight": "700",
+                              "marginBottom": "2px"}),
+    ]
+    if delta_text:
+        body_children.append(
+            html.Span(
+                f"{badge_arrow}{delta_text}",
+                style={
+                    "display": "inline-block",
+                    "backgroundColor": badge_colour + "1a",  # ~10% alpha
+                    "color": badge_colour,
+                    "borderRadius": "4px",
+                    "padding": "1px 6px",
+                    "fontSize": "0.72rem",
+                    "fontWeight": "600",
+                    "marginBottom": "2px",
+                },
+            )
+        )
+    body_children.append(
+        html.P(subtitle, className="mb-0 text-muted",
+               style={"fontSize": "0.78rem"})
+    )
+
     return dbc.Card([
-        dbc.CardBody([
-            html.P(title, className="mb-1 text-muted",
-                   style={"fontSize": "0.78rem", "fontWeight": "600",
-                          "letterSpacing": "0.05em", "textTransform": "uppercase"}),
-            html.H4(value, style={"color": accent, "fontWeight": "700",
-                                   "marginBottom": "2px"}),
-            html.P(subtitle, className="mb-0 text-muted",
-                   style={"fontSize": "0.78rem"}),
-        ])
+        dbc.CardBody(body_children)
     ], style={"backgroundColor": BG_CARD, "border": f"1px solid {BORDER}",
               "borderLeft": f"4px solid {accent}",
               "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"})
