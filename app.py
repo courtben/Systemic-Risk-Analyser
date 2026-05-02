@@ -36,6 +36,33 @@ import dash_bootstrap_components as dbc
 
 warnings.filterwarnings("ignore")
 
+# ── Default Plotly graph config ──────────────────────────────────────────────
+# Surfaces a visible toolbar on every chart with a high-quality PNG export
+# button ("Save as image"). Lasso/box-select are removed since they're not
+# meaningful for any of our charts, and Plotly's brand logo is hidden.
+_DEFAULT_GRAPH_CONFIG = {
+    "displayModeBar": True,
+    "displaylogo": False,
+    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+    "toImageButtonOptions": {
+        "format": "png",
+        "filename": "systemic-risk-chart",
+        "height": 700,
+        "width": 1200,
+        "scale": 2,
+    },
+}
+
+_original_dcc_graph = dcc.Graph
+
+def _Graph(*args, **kwargs):
+    """Drop-in replacement for dcc.Graph that injects our default config."""
+    if "config" not in kwargs:
+        kwargs["config"] = _DEFAULT_GRAPH_CONFIG
+    return _original_dcc_graph(*args, **kwargs)
+
+dcc.Graph = _Graph
+
 # ── Load / compute data at startup ────────────────────────────────────────────
 
 print("=" * 60)
@@ -264,13 +291,20 @@ controls = dbc.Container([
         ], xs=12, md=4),
         dbc.Col([
             html.Label("Quick range", className="text-muted mb-0", style=_LBL_STYLE),
-            html.Div(
+            html.Div([
                 dbc.ButtonGroup([
                     dbc.Button(label, id=pid, size="sm",
                                color="primary", outline=True, n_clicks=0)
                     for pid, label, _ in _PRESET_BUTTONS
-                ], size="sm"),
-            ),
+                ], size="sm", className="me-2"),
+                dbc.Button("⟲ Reset all",
+                           id="btn-reset-defaults",
+                           size="sm",
+                           color="secondary",
+                           outline=True,
+                           n_clicks=0,
+                           title="Reset date range, banks, α, k and d to defaults"),
+            ], className="d-flex flex-wrap align-items-center"),
         ], xs=12, md=8),
     ], className="gy-1 align-items-end"),
 
@@ -424,21 +458,32 @@ overview_layout = dbc.Container([
                                style={"display": "inline-block",
                                       "transition": "transform 0.15s",
                                       "marginRight": "6px"}),
-                     "Risk Summary (latest date in selected range)"],
+                     "Risk Summary"],
                     id="btn-risk-summary",
                     color="link",
                     size="sm",
-                    className="p-0 text-decoration-none",
+                    className="p-0 text-decoration-none me-3",
                     style={"fontSize": "0.82rem", "fontWeight": "600",
                            "color": TEXT_MAIN},
                     n_clicks=0,
+                ),
+                html.Span("Snapshot date:", className="text-muted me-2",
+                          style={"fontSize": "0.78rem"}),
+                dcc.DatePickerSingle(
+                    id="risk-summary-date",
+                    min_date_allowed=DATE_MIN,
+                    max_date_allowed=DATE_MAX,
+                    display_format="YYYY-MM-DD",
+                    placeholder="Latest in range",
+                    clearable=True,
+                    style={"fontSize": "0.78rem"},
                 ),
                 dbc.Button("Download CSV", id="btn-download-overview",
                            size="sm", color="primary", outline=True,
                            className="float-end",
                            style={"fontSize": "0.75rem"}),
                 dcc.Download(id="download-overview"),
-            ], className="mb-2"),
+            ], className="mb-2 d-flex align-items-center flex-wrap"),
             dbc.Collapse(
                 html.Div(id="risk-table"),
                 id="risk-summary-collapse",
@@ -536,32 +581,9 @@ timeseries_layout = dbc.Container([
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
 srisk_layout = dbc.Container([
-    dbc.Row([
-        dbc.Col([
-            html.Label("Normalisation", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
-            dbc.RadioItems(
-                id="srisk-norm",
-                options=[
-                    {"label": " Absolute (USD bn)",      "value": "abs"},
-                    {"label": " % of aggregate SRISK",    "value": "pct_agg"},
-                    {"label": " % of own market cap",     "value": "pct_mc"},
-                ],
-                value="abs",
-                inline=True,
-                inputStyle={"marginRight": "4px"},
-                labelStyle={"marginRight": "16px", "fontSize": "0.85rem"},
-            ),
-        ], xs=12, md=9, className="mt-3"),
-        dbc.Col([
-            dbc.Button("Download CSV", id="btn-download-srisk",
-                       size="sm", color="primary", outline=True,
-                       className="float-end mt-4"),
-            dcc.Download(id="download-srisk"),
-        ], xs=12, md=3),
-    ]),
-    # Prudential capital ratio k and LRMES decline threshold d —
-    # user-selectable for what-if analysis.
+    # ── Stress parameters (global): k, d sliders + Download ──────────────────
+    # k and d affect both the cross-sectional and time-series views below,
+    # so they sit at the top of the tab as global what-if controls.
     dbc.Row([
         dbc.Col([
             html.Label(
@@ -613,6 +635,39 @@ srisk_layout = dbc.Container([
             ),
         ], xs=12, md=6, className="mt-2 mb-3"),
     ]),
+
+    html.Hr(className="my-2"),
+
+    # ── Section 1: Cross-sectional view (bar + pie) ─────────────────────────
+    # Normalisation toggle and download sit inline with the section header.
+    dbc.Row([
+        dbc.Col([
+            html.H6("Cross-sectional SRISK",
+                    className="mb-0 mt-2",
+                    style={"fontWeight": "700", "fontSize": "0.92rem"}),
+        ], xs=12, md=4),
+        dbc.Col([
+            dbc.RadioItems(
+                id="srisk-norm",
+                options=[
+                    {"label": " USD bn",         "value": "abs"},
+                    {"label": " % of aggregate", "value": "pct_agg"},
+                    {"label": " % of mkt cap",   "value": "pct_mc"},
+                ],
+                value="abs",
+                inline=True,
+                inputStyle={"marginRight": "4px"},
+                labelStyle={"marginRight": "12px", "fontSize": "0.82rem"},
+                className="mt-2",
+            ),
+        ], xs=12, md=6),
+        dbc.Col([
+            dbc.Button("Download CSV", id="btn-download-srisk",
+                       size="sm", color="primary", outline=True,
+                       className="float-end mt-2"),
+            dcc.Download(id="download-srisk"),
+        ], xs=12, md=2),
+    ], className="align-items-center"),
     dbc.Row([
         dbc.Col([
             html.P(
@@ -633,11 +688,16 @@ srisk_layout = dbc.Container([
             dcc.Graph(id="chart-srisk-pie"),
         ], xs=12, md=5, className="mb-3"),
     ]),
+    html.Hr(className="my-2"),
+
+    # ── Section 2: Time view (aggregate or stacked) ────────────────────────
     dbc.Row([
         dbc.Col([
-            html.Label("SRISK over time — view mode",
-                       className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
+            html.H6("SRISK over time",
+                    className="mb-0 mt-2",
+                    style={"fontWeight": "700", "fontSize": "0.92rem"}),
+        ], xs=12, md=4),
+        dbc.Col([
             dbc.RadioItems(
                 id="srisk-ts-mode",
                 options=[
@@ -646,12 +706,12 @@ srisk_layout = dbc.Container([
                 ],
                 value="aggregate",
                 inline=True,
-                inputClassName="me-1",
-                labelClassName="me-3",
-                labelStyle={"fontSize": "0.85rem", "fontWeight": "500"},
+                inputStyle={"marginRight": "4px"},
+                labelStyle={"marginRight": "12px", "fontSize": "0.82rem"},
+                className="mt-2",
             ),
-        ], xs=12, className="mb-2"),
-    ]),
+        ], xs=12, md=8),
+    ], className="align-items-center mb-1"),
     dbc.Row([
         dbc.Col([
             html.P(
@@ -933,6 +993,52 @@ methodology_layout = dbc.Container([
                 ),
 
                 html.Hr(),
+                html.H6("Worked numeric example", className="mb-2 mt-3",
+                        style={"fontWeight": "700"}),
+                html.P(
+                    "Illustrative end-to-end calculation with stylised inputs to "
+                    "show how the formulas combine into a SRISK number. "
+                    "Numbers below are rounded for clarity.",
+                    className="text-muted mb-2",
+                    style={"fontSize": "0.83rem"},
+                ),
+                html.Pre(
+                    "Inputs (illustrative bank, 2020-03-16 — COVID crash):\n"
+                    "  ρ(t)     = 0.72         (DCC correlation with S&P 500)\n"
+                    "  σ_f(t)   = 4.10 % daily (firm GJR-GARCH vol)\n"
+                    "  σ_m(t)   = 3.80 % daily (market GJR-GARCH vol)\n"
+                    "  D̃(t)    = 1,800 bn USD (forward-rolled liabilities)\n"
+                    "  W(t)    =   220 bn USD (market cap)\n"
+                    "  k = 8 %, d = 40 %, α = 5 %\n\n"
+                    "Step 1 — Conditional beta\n"
+                    "  β(t)     = ρ · σ_f / σ_m  =  0.72 · 4.10 / 3.80  ≈  0.777\n\n"
+                    "Step 2 — LRMES (closed form)\n"
+                    "  LRMES(t) = 1 − (1 − 0.40)^0.777  =  1 − 0.60^0.777  ≈  0.327  (32.7 %)\n\n"
+                    "Step 3 — SRISK\n"
+                    "  SRISK(t) = max(0, k·D̃ − (1−k)·(1−LRMES)·W)\n"
+                    "           = max(0, 0.08·1800 − 0.92·(1−0.327)·220)\n"
+                    "           = max(0, 144 − 136.20)\n"
+                    "           ≈ 7.8 bn USD\n\n"
+                    "Interpretation: under a 40 % market decline this bank would face\n"
+                    "an estimated capital shortfall of ≈ 7.8 bn USD relative to the\n"
+                    "8 % prudential threshold.",
+                    style={"backgroundColor": "#f8f9fa",
+                           "padding": "12px 16px", "borderRadius": "4px",
+                           "border": f"1px solid {BORDER}",
+                           "fontSize": "0.82rem", "marginBottom": "8px",
+                           "whiteSpace": "pre-wrap",
+                           "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
+                ),
+                html.P(
+                    "Try this in the dashboard: select a single bank, set α = 5 %, "
+                    "k = 8 %, d = 40 %, and check the SRISK over time chart around "
+                    "March 2020 — you should see a comparable order of magnitude "
+                    "for the largest US institutions.",
+                    className="text-muted mb-3",
+                    style={"fontSize": "0.78rem", "fontStyle": "italic"},
+                ),
+
+                html.Hr(),
                 html.H6("Data sources", className="mb-2 mt-3",
                         style={"fontWeight": "700"}),
                 html.Ul([
@@ -1052,8 +1158,8 @@ app.layout = html.Div([
 # ── Time-range presets ─────────────────────────────────────────────────────────
 
 @app.callback(
-    Output("date-range", "start_date"),
-    Output("date-range", "end_date"),
+    Output("date-range", "start_date", allow_duplicate=True),
+    Output("date-range", "end_date",   allow_duplicate=True),
     [Input(pid, "n_clicks") for pid, _, _ in _PRESET_BUTTONS],
     prevent_initial_call=True,
 )
@@ -1076,16 +1182,39 @@ def apply_preset_range(*_clicks):
     return start, end
 
 
+# ── Reset to defaults ─────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("date-range",      "start_date", allow_duplicate=True),
+    Output("date-range",      "end_date",   allow_duplicate=True),
+    Output("alpha-select",    "value",      allow_duplicate=True),
+    Output("srisk-k-slider",  "value",      allow_duplicate=True),
+    Output("srisk-d-slider",  "value",      allow_duplicate=True),
+    Output("bank-select",     "value",      allow_duplicate=True),
+    Input("btn-reset-defaults", "n_clicks"),
+    prevent_initial_call=True,
+)
+def reset_to_defaults(n_clicks):
+    """Restore controls to their default state.
+
+    Defaults: full date range, α = 5%, k = 8%, d = 40%, all visible banks selected.
+    """
+    if not n_clicks:
+        return no_update, no_update, no_update, no_update, no_update, no_update
+    default_banks = [t for t in ALL_BANKS if t in RETURNS.columns]
+    return DATE_DEF_START, DATE_MAX, 0.05, 8, 40, default_banks
+
+
 # ── Bank dropdown ──────────────────────────────────────────────────────────────
 
 @app.callback(
     Output("bank-select", "options"),
-    Output("bank-select", "value"),
+    Output("bank-select", "value", allow_duplicate=True),
     Input("btn-all",             "n_clicks"),
     Input("btn-none",            "n_clicks"),
     Input("custom-banks-store",  "data"),
     State("bank-select",         "value"),
-    prevent_initial_call=False,
+    prevent_initial_call="initial_duplicate",
 )
 def update_bank_options(_all, _none, custom_banks, current_values):
     from dash import callback_context
@@ -1531,13 +1660,14 @@ def update_alpha(alpha):
     Output("chart-srisk-dw",   "figure"),
     Output("chart-covar-dw",   "figure"),
     Output("risk-table",       "children"),
-    Input("date-range",    "start_date"),
-    Input("date-range",    "end_date"),
-    Input("bank-select",   "value"),
-    Input("refresh-store", "data"),
-    Input("alpha-store",   "data"),
+    Input("date-range",        "start_date"),
+    Input("date-range",        "end_date"),
+    Input("bank-select",       "value"),
+    Input("refresh-store",     "data"),
+    Input("alpha-store",       "data"),
+    Input("risk-summary-date", "date"),
 )
-def update_overview(start, end, tickers, _refresh, _alpha):
+def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     tickers = tickers or []
     mes_df    = _slice(MEASURES["mes"],         start, end, tickers)
     lrmes_df  = _slice(MEASURES.get("lrmes", pd.DataFrame()), start, end, tickers)
@@ -1557,26 +1687,84 @@ def update_overview(start, end, tickers, _refresh, _alpha):
     agg_srisk = latest_srisk.sum()
     agg_lvg   = latest_lvg.mean() if not latest_lvg.empty else float("nan")
 
+    # ── 7-day delta for the aggregate KPI values ──────────────────────────────
+    # Compares the latest cross-sectional aggregate (mean / sum) to the value
+    # 7 calendar days earlier, so KPI cards reflect a recent trend.
+    def _agg_7d_delta(df: pd.DataFrame, agg: str) -> float:
+        if df is None or df.empty:
+            return float("nan")
+        d = df.dropna(how="all")
+        if d.empty:
+            return float("nan")
+        last_dt = d.index[-1]
+        prev_dt = last_dt - pd.Timedelta(days=7)
+        try:
+            prev_row = d.asof(prev_dt)
+        except Exception:
+            return float("nan")
+        if prev_row is None or (hasattr(prev_row, "empty") and prev_row.empty):
+            return float("nan")
+        cur = d.iloc[-1]
+        if agg == "mean":
+            return float(cur.mean()) - float(prev_row.mean())
+        if agg == "sum":
+            return float(cur.sum()) - float(prev_row.sum())
+        if agg == "abs_mean":
+            return float(cur.abs().mean()) - float(prev_row.abs().mean())
+        return float("nan")
+
+    d_mes_kpi   = _agg_7d_delta(mes_df,    "mean")
+    d_lrmes_kpi = _agg_7d_delta(lrmes_df,  "mean")
+    d_cov_kpi   = _agg_7d_delta(dcovar_df, "abs_mean")
+    d_srisk_kpi = _agg_7d_delta(srisk_df,  "sum")
+    d_lvg_kpi   = _agg_7d_delta(lvg_df,    "mean")
+
+    def _badge(delta: float, fmt: str = "pp") -> tuple[str | None, str]:
+        """Format a delta value as (text, direction) for kpi_card."""
+        if pd.isna(delta) or delta == 0:
+            return None, "neutral"
+        direction = "up" if delta > 0 else "down"
+        if fmt == "pp":
+            text = f"{delta * 100:+.2f} pp vs 7d ago"
+        elif fmt == "bn":
+            text = f"{delta / 1e9:+.2f} bn vs 7d ago"
+        elif fmt == "ratio":
+            text = f"{delta:+.2f} vs 7d ago"
+        else:
+            text = f"{delta:+.4f} vs 7d ago"
+        return text, direction
+
+    mes_badge,   mes_dir   = _badge(d_mes_kpi,   "pp")
+    lrmes_badge, lrmes_dir = _badge(d_lrmes_kpi, "pp")
+    cov_badge,   cov_dir   = _badge(d_cov_kpi,   "pp")
+    srisk_badge, srisk_dir = _badge(d_srisk_kpi, "bn")
+    lvg_badge,   lvg_dir   = _badge(d_lvg_kpi,   "ratio")
+
     kpi_mes  = kpi_card("Avg. MES (latest)",
                         _fmt_pct(agg_mes),
                         "Mean 1-day tail loss",
-                        "#c62828")
+                        "#c62828",
+                        delta_text=mes_badge, delta_direction=mes_dir)
     kpi_lrmes = kpi_card("Avg. LRMES (latest)",
                         _fmt_pct(agg_lrmes),
-                        "Long-run MES at 40% market decline",
-                        "#ad1457")
+                        "Long-run MES at d-decline scenario",
+                        "#ad1457",
+                        delta_text=lrmes_badge, delta_direction=lrmes_dir)
     kpi_cov  = kpi_card("Avg. |ΔCoVaR| (latest)",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                         "Mean marginal systemic contribution",
-                        "#e65100")
+                        "#e65100",
+                        delta_text=cov_badge, delta_direction=cov_dir)
     kpi_srisk = kpi_card("Total SRISK (latest)",
                          _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
                          "Aggregate capital shortfall estimate",
-                         "#2e7d32")
+                         "#2e7d32",
+                         delta_text=srisk_badge, delta_direction=srisk_dir)
     kpi_lvg  = kpi_card("Avg. Leverage (LVG)",
                         _fmt_ratio(agg_lvg),
                         "(Liabilities + Market Cap) / Market Cap",
-                        "#0277bd")
+                        "#0277bd",
+                        delta_text=lvg_badge, delta_direction=lvg_dir)
 
     # Overview ranking bars — show only the top 10 banks per measure
     _TOP_N = 10
@@ -1612,6 +1800,27 @@ def update_overview(start, end, tickers, _refresh, _alpha):
     d_sri_w  = _delta(srisk_df,  7)
     d_sri_m  = _delta(srisk_df,  30)
 
+    # ── Snapshot row for the Risk Summary table ──────────────────────────────
+    # If the user picks a snapshot date, use that row; otherwise fall back to
+    # the latest available row in the selected range. KPIs and ranking charts
+    # always use the latest row.
+    def _row_at(df: pd.DataFrame, date_str: str | None) -> pd.Series:
+        if df is None or df.empty:
+            return pd.Series(dtype=float)
+        if not date_str:
+            return _latest_row(df)
+        try:
+            target = pd.Timestamp(date_str)
+            return df.asof(target)
+        except Exception:
+            return _latest_row(df)
+
+    snap_mes   = _row_at(mes_df,    snap_date)
+    snap_lrmes = _row_at(lrmes_df,  snap_date)
+    snap_covar = _row_at(dcovar_df, snap_date)
+    snap_srisk = _row_at(srisk_df,  snap_date)
+    snap_lvg   = _row_at(lvg_df,    snap_date)
+
     # Summary table as sortable DataTable with Δ-week / Δ-month columns
     all_tickers = sorted(
         set(latest_mes.index) | set(latest_covar.index)
@@ -1621,16 +1830,16 @@ def update_overview(start, end, tickers, _refresh, _alpha):
         table_rows.append({
             "bank":      _name(t),
             "ticker":    t,
-            "mes":       float(latest_mes.get(t,   np.nan)) if pd.notna(latest_mes.get(t,   np.nan)) else None,
-            "mes_dw":    float(d_mes_w.get(t,      np.nan)) if pd.notna(d_mes_w.get(t,      np.nan)) else None,
-            "mes_dm":    float(d_mes_m.get(t,      np.nan)) if pd.notna(d_mes_m.get(t,      np.nan)) else None,
-            "lrmes":     float(latest_lrmes.get(t, np.nan)) if pd.notna(latest_lrmes.get(t, np.nan)) else None,
-            "covar":     float(latest_covar.get(t, np.nan)) if pd.notna(latest_covar.get(t, np.nan)) else None,
-            "covar_dw":  float(d_cov_w.get(t,      np.nan)) if pd.notna(d_cov_w.get(t,      np.nan)) else None,
-            "srisk_bn":  (float(latest_srisk.get(t, np.nan)) / 1e9) if pd.notna(latest_srisk.get(t, np.nan)) else None,
-            "srisk_dw":  (float(d_sri_w.get(t,    np.nan)) / 1e9) if pd.notna(d_sri_w.get(t,    np.nan)) else None,
-            "srisk_dm":  (float(d_sri_m.get(t,    np.nan)) / 1e9) if pd.notna(d_sri_m.get(t,    np.nan)) else None,
-            "lvg":       float(latest_lvg.get(t,   np.nan)) if pd.notna(latest_lvg.get(t,   np.nan)) else None,
+            "mes":       float(snap_mes.get(t,   np.nan)) if pd.notna(snap_mes.get(t,   np.nan)) else None,
+            "mes_dw":    float(d_mes_w.get(t,    np.nan)) if pd.notna(d_mes_w.get(t,    np.nan)) else None,
+            "mes_dm":    float(d_mes_m.get(t,    np.nan)) if pd.notna(d_mes_m.get(t,    np.nan)) else None,
+            "lrmes":     float(snap_lrmes.get(t, np.nan)) if pd.notna(snap_lrmes.get(t, np.nan)) else None,
+            "covar":     float(snap_covar.get(t, np.nan)) if pd.notna(snap_covar.get(t, np.nan)) else None,
+            "covar_dw":  float(d_cov_w.get(t,    np.nan)) if pd.notna(d_cov_w.get(t,    np.nan)) else None,
+            "srisk_bn":  (float(snap_srisk.get(t, np.nan)) / 1e9) if pd.notna(snap_srisk.get(t, np.nan)) else None,
+            "srisk_dw":  (float(d_sri_w.get(t,   np.nan)) / 1e9) if pd.notna(d_sri_w.get(t,   np.nan)) else None,
+            "srisk_dm":  (float(d_sri_m.get(t,   np.nan)) / 1e9) if pd.notna(d_sri_m.get(t,   np.nan)) else None,
+            "lvg":       float(snap_lvg.get(t,   np.nan)) if pd.notna(snap_lvg.get(t,   np.nan)) else None,
         })
 
     # Note: dash_table.FormatTemplate.percentage(2) returns a Format object,
