@@ -1,7 +1,7 @@
 """
 Systemic Risk Dashboard — US Banks
 ====================================
-Interactive Dash application visualising MES, SES, DeltaCoVaR, and SRISK
+Interactive Dash application visualising MES, DeltaCoVaR, and SRISK
 for major US banking institutions. Custom banks can be added by ticker.
 
 Run:
@@ -167,9 +167,11 @@ timeseries_chart     = C.timeseries_chart
 _srisk_bar_generic   = C.srisk_bar_generic
 srisk_bar            = C.srisk_bar
 srisk_pie            = C.srisk_pie
+srisk_stacked_area   = C.srisk_stacked_area
 price_chart          = C.price_chart
 corr_heatmap         = C.corr_heatmap
 return_hist          = C.return_hist
+market_dcc_chart     = C.market_dcc_chart
 kpi_card             = C.kpi_card
 
 
@@ -216,7 +218,7 @@ header = dbc.Navbar(
                     className="mb-0",
                     style={"color": TEXT_MAIN, "fontWeight": "700", "fontSize": "1.05rem"}),
             html.Small(
-                "MES · SES · ΔCoVaR · SRISK  |  "
+                "MES · ΔCoVaR · SRISK  |  "
                 "Acharya et al. (2010/2017) · Adrian & Brunnermeier (2016) · Brownlees & Engle (2017)",
                 className="text-muted",
             ),
@@ -245,111 +247,103 @@ _PRESET_BUTTONS = [
     ("preset-all", "All", None),
 ]
 
+_LBL_STYLE = {"fontSize": "0.72rem", "fontWeight": "600"}
+
 controls = dbc.Container([
+    # Row 1 — Date range + Quick range
     dbc.Row([
-        # Date range
         dbc.Col([
-            html.Label("Date range", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
+            html.Label("Date range", className="text-muted mb-0", style=_LBL_STYLE),
             dcc.DatePickerRange(
                 id="date-range",
                 min_date_allowed=DATE_MIN, max_date_allowed=DATE_MAX,
                 start_date=DATE_DEF_START, end_date=DATE_MAX,
                 display_format="YYYY-MM-DD",
-                style={"fontSize": "0.85rem"},
+                style={"fontSize": "0.8rem"},
             ),
-        ], xs=12, md=4, className="mb-2"),
-
-        # Time-range presets
+        ], xs=12, md=4),
         dbc.Col([
-            html.Label("Quick range", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
-            dbc.ButtonGroup([
-                dbc.Button(label, id=pid, size="sm",
-                           color="primary", outline=True, n_clicks=0)
-                for pid, label, _ in _PRESET_BUTTONS
-            ], size="sm"),
-        ], xs=12, md=6, className="mb-2"),
+            html.Label("Quick range", className="text-muted mb-0", style=_LBL_STYLE),
+            html.Div(
+                dbc.ButtonGroup([
+                    dbc.Button(label, id=pid, size="sm",
+                               color="primary", outline=True, n_clicks=0)
+                    for pid, label, _ in _PRESET_BUTTONS
+                ], size="sm"),
+            ),
+        ], xs=12, md=8),
+    ], className="gy-1 align-items-end"),
 
-        # Select / deselect all
-        dbc.Col([
-            html.Label("Selection", className="text-muted mb-1 d-block",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
-            dbc.ButtonGroup([
-                dbc.Button("All", id="btn-all", size="sm",
-                           color="secondary", outline=True),
-                dbc.Button("None", id="btn-none", size="sm",
-                           color="secondary", outline=True),
-            ]),
-        ], xs=12, md=2, className="mb-2"),
-    ], className="gy-0 align-items-end"),
-
-    # Bank selector (second row, full width)
+    # Row 2 — Banks + Add bank + Selection (All/None)
     dbc.Row([
         dbc.Col([
-            html.Label("Banks", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
+            html.Label("Banks", className="text-muted mb-0", style=_LBL_STYLE),
             dcc.Dropdown(
                 id="bank-select",
                 multi=True,
                 placeholder="Select banks ...",
-                style={"fontSize": "0.85rem"},
+                style={"fontSize": "0.8rem"},
             ),
-        ], xs=12),
-    ], className="mt-1"),
-
-    # Critical value slider (third row)
-    dbc.Row([
+        ], xs=12, md=6),
         dbc.Col([
-            html.Label(
-                id="alpha-label",
-                children="Critical Value α = 5.0%  (worst 5% of market days)",
-                className="text-muted mb-1",
-                style={"fontSize": "0.78rem", "fontWeight": "600"},
-            ),
-            dcc.Slider(
-                id="alpha-slider",
-                min=1, max=10, step=0.5,
-                value=5,
-                marks={i: f"{i}%" for i in range(1, 11)},
-                tooltip={"placement": "bottom", "always_visible": False},
-                className="mb-0",
-            ),
-            html.Small(
-                "Changing α recomputes MES, LRMES, SES & SRISK interactively. "
-                "ΔCoVaR is precomputed at α ∈ {1, 2.5, 5, 7.5, 10}% and snaps "
-                "to the nearest grid point.",
-                className="text-muted",
-                style={"fontSize": "0.74rem"},
-            ),
-        ], xs=12, md=8, className="mb-2"),
-    ], className="mt-2"),
-
-    # Add custom bank (fourth row)
-    dbc.Row([
-        dbc.Col([
-            html.Label("Add bank by ticker", className="text-muted mb-1",
-                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
+            html.Label("Add bank by ticker", className="text-muted mb-0", style=_LBL_STYLE),
             dbc.InputGroup([
                 dbc.Input(
                     id="custom-ticker-input",
                     placeholder="e.g. BRK-B, USB, TFC ...",
                     type="text",
                     size="sm",
-                    style={"fontSize": "0.85rem"},
+                    style={"fontSize": "0.8rem"},
                     debounce=False,
                 ),
-                dbc.Button("Add Bank", id="btn-add-bank", color="primary",
+                dbc.Button("Add", id="btn-add-bank", color="primary",
                            size="sm", n_clicks=0),
             ], size="sm"),
             dcc.Loading(
                 type="dot",
                 color="#0d47a1",
-                children=html.Div(id="add-bank-status", className="mt-1"),
+                children=html.Div(id="add-bank-status",
+                                  style={"fontSize": "0.7rem", "minHeight": "0"}),
             ),
-        ], xs=12, md=7),
-    ], className="mt-2 mb-1"),
-], fluid=True, className="py-2 px-3",
+        ], xs=12, md=4),
+        dbc.Col([
+            html.Label("Selection", className="text-muted mb-0 d-block", style=_LBL_STYLE),
+            dbc.ButtonGroup([
+                dbc.Button("All", id="btn-all", size="sm",
+                           color="secondary", outline=True),
+                dbc.Button("None", id="btn-none", size="sm",
+                           color="secondary", outline=True),
+            ], size="sm"),
+        ], xs=12, md=2),
+    ], className="gy-1 mt-1 align-items-end"),
+
+    # Row 3 — Critical value α (inline, compact)
+    dbc.Row([
+        dbc.Col(
+            html.Div([
+                html.Span(
+                    id="alpha-label",
+                    children="Critical Value α = 5.0%  (worst 5% of market days) — applies to MES & ΔCoVaR; LRMES/SRISK are α-invariant (driven by d = 40%)",
+                    className="text-muted me-3",
+                    style={"fontSize": "0.72rem", "fontWeight": "600"},
+                ),
+                dbc.RadioItems(
+                    id="alpha-select",
+                    options=[
+                        {"label": f"{a*100:g}%", "value": a} for a in ALPHA_GRID
+                    ],
+                    value=0.05,
+                    inline=True,
+                    className="d-inline-flex mb-0",
+                    inputClassName="me-1",
+                    labelClassName="me-3 mb-0",
+                    labelStyle={"fontSize": "0.8rem", "fontWeight": "500"},
+                ),
+            ], className="d-flex align-items-center flex-wrap"),
+            xs=12,
+        ),
+    ], className="gy-0 mt-1"),
+], fluid=True, className="py-1 px-3",
    style={"backgroundColor": "#f8f9fa",
           "borderBottom": f"1px solid {BORDER}"})
 
@@ -365,40 +359,91 @@ overview_layout = dbc.Container([
     dbc.Row([
         dbc.Col(id="kpi-mes",      xs=6, md=4, lg=2, className="mb-3"),
         dbc.Col(id="kpi-lrmes",    xs=6, md=4, lg=2, className="mb-3"),
-        dbc.Col(id="kpi-ses",      xs=6, md=4, lg=2, className="mb-3"),
         dbc.Col(id="kpi-covar",    xs=6, md=4, lg=2, className="mb-3"),
         dbc.Col(id="kpi-srisk",    xs=6, md=4, lg=2, className="mb-3"),
         dbc.Col(id="kpi-leverage", xs=6, md=4, lg=2, className="mb-3"),
     ], className="mt-3"),
     dbc.Row([
-        dbc.Col(dcc.Graph(id="chart-mes-rank"),   xs=12, md=4, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-ses-rank"),   xs=12, md=4, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-covar-rank"), xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Ranks selected banks by their latest MES value. "
+                   "Higher MES signals greater expected daily equity loss when the market is in its worst α% of days.",
+                   className="text-muted mb-1 mt-2",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-mes-rank"),
+        ], xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Ranks selected banks by their latest SRISK. "
+                   "Positive SRISK identifies institutions with a capital shortfall under the current stress scenario (d% market decline).",
+                   className="text-muted mb-1 mt-2",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-srisk-rank"),
+        ], xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Ranks selected banks by their latest ΔCoVaR. "
+                   "Larger values indicate a greater contribution to market-wide VaR when the firm moves from its median to a distressed state.",
+                   className="text-muted mb-1 mt-2",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-covar-rank"),
+        ], xs=12, md=4, className="mb-3"),
     ]),
     dbc.Row([
         dbc.Col([
-            html.P("Change over last 7 trading days", className="text-muted mb-1 mt-2",
+            html.P("7-day change across measures — identifies banks whose systemic risk profile has shifted most recently.",
+                   className="text-muted mb-1 mt-2",
                    style={"fontSize": "0.82rem", "fontWeight": "600"}),
         ], xs=12),
     ]),
     dbc.Row([
-        dbc.Col(dcc.Graph(id="chart-mes-dw"),   xs=12, md=4, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-srisk-dw"), xs=12, md=4, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-covar-dw"), xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Recent shift in MES. "
+                   "Red bars flag banks whose tail sensitivity to the market has increased over the past week.",
+                   className="text-muted mb-1",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-mes-dw"),
+        ], xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Recent shift in SRISK. "
+                   "Highlights banks where the estimated capital shortfall under stress has materially widened or narrowed.",
+                   className="text-muted mb-1",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-srisk-dw"),
+        ], xs=12, md=4, className="mb-3"),
+        dbc.Col([
+            html.P("Recent shift in ΔCoVaR. "
+                   "Identifies banks whose contribution to market-wide distress risk has grown or receded in the last seven trading days.",
+                   className="text-muted mb-1",
+                   style={"fontSize": "0.78rem"}),
+            dcc.Graph(id="chart-covar-dw"),
+        ], xs=12, md=4, className="mb-3"),
     ]),
     dbc.Row([
         dbc.Col([
             html.Div([
-                html.P("Risk Summary (latest date in selected range)",
-                       className="text-muted mb-0 d-inline-block",
-                       style={"fontSize": "0.82rem", "fontWeight": "600"}),
+                dbc.Button(
+                    [html.Span("▸", id="risk-summary-caret",
+                               style={"display": "inline-block",
+                                      "transition": "transform 0.15s",
+                                      "marginRight": "6px"}),
+                     "Risk Summary (latest date in selected range)"],
+                    id="btn-risk-summary",
+                    color="link",
+                    size="sm",
+                    className="p-0 text-decoration-none",
+                    style={"fontSize": "0.82rem", "fontWeight": "600",
+                           "color": TEXT_MAIN},
+                    n_clicks=0,
+                ),
                 dbc.Button("Download CSV", id="btn-download-overview",
                            size="sm", color="primary", outline=True,
                            className="float-end",
                            style={"fontSize": "0.75rem"}),
                 dcc.Download(id="download-overview"),
             ], className="mb-2"),
-            html.Div(id="risk-table"),
+            dbc.Collapse(
+                html.Div(id="risk-table"),
+                id="risk-summary-collapse",
+                is_open=False,
+            ),
         ], xs=12, className="mb-3"),
     ]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
@@ -413,7 +458,6 @@ timeseries_layout = dbc.Container([
                 options=[
                     {"label": "MES — Marginal Expected Shortfall",       "value": "mes"},
                     {"label": "LRMES — Long-Run MES (40% decline)",       "value": "lrmes"},
-                    {"label": "SES — Systemic Expected Shortfall",        "value": "ses"},
                     {"label": "ΔCoVaR — Conditional VaR contribution",   "value": "delta_covar"},
                     {"label": "CoVaR (level)",                            "value": "covar"},
                 ],
@@ -460,7 +504,18 @@ timeseries_layout = dbc.Container([
             dcc.Download(id="download-ts"),
         ], xs=12, md=2, className="mt-3 mb-2"),
     ]),
-    dbc.Row([dbc.Col(dcc.Graph(id="chart-timeseries"), xs=12)]),
+    dbc.Row([
+        dbc.Col([
+            html.P(
+                "Time series of the selected risk measure for each bank. "
+                "Individual traces show bank-level dynamics; the aggregate line reflects the cross-sectional mean. "
+                "Shaded bands mark recognised crisis episodes for contextual reference.",
+                className="text-muted mb-1 mt-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-timeseries"),
+        ], xs=12),
+    ]),
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -468,10 +523,6 @@ timeseries_layout = dbc.Container([
                     html.B("MES"), " — expected fractional loss of the bank when the "
                     f"market ({MARKET_NAME}) falls below its α-th percentile (set above). "
                     "Higher MES = greater tail sensitivity.",
-                    html.Br(),
-                    html.B("SES"), " — capital shortfall estimate (Acharya et al. 2010). "
-                    "SES = max(0, k·D·(1+ΔD/D) − (1−k)·W·(1+ΔW/W)), k = 8% capital ratio. "
-                    "D = liabilities, W = market cap.  Reported in USD billions.",
                     html.Br(),
                     html.B("ΔCoVaR"), " — market's VaR when the bank is in stress minus "
                     "its VaR at its median state (Adrian & Brunnermeier 2016). "
@@ -509,7 +560,8 @@ srisk_layout = dbc.Container([
             dcc.Download(id="download-srisk"),
         ], xs=12, md=3),
     ]),
-    # Prudential capital ratio k — user-selectable for what-if analysis
+    # Prudential capital ratio k and LRMES decline threshold d —
+    # user-selectable for what-if analysis.
     dbc.Row([
         dbc.Col([
             html.Label(
@@ -534,13 +586,83 @@ srisk_layout = dbc.Container([
                 className="text-muted",
                 style={"fontSize": "0.74rem"},
             ),
-        ], xs=12, md=9, className="mt-2 mb-3"),
+        ], xs=12, md=6, className="mt-2 mb-3"),
+        dbc.Col([
+            html.Label(
+                id="srisk-d-label",
+                children="LRMES decline threshold  d = 40.0%",
+                className="text-muted mb-1",
+                style={"fontSize": "0.78rem", "fontWeight": "600"},
+            ),
+            dcc.Slider(
+                id="srisk-d-slider",
+                min=10, max=60, step=2.5,
+                value=40,
+                marks={i: f"{i}%" for i in range(10, 61, 10)},
+                tooltip={"placement": "bottom", "always_visible": False},
+                className="mb-0",
+            ),
+            html.Small(
+                "d is the 1-month market decline used to define LRMES — the "
+                "expected equity loss conditional on the market falling at "
+                "least d over the horizon. LRMES is rescaled analytically: "
+                "LRMES(d) = 1 − (1 − LRMES₀)^(log(1−d)/log(1−0.40)). "
+                "Brownlees & Engle (2017) use 40%.",
+                className="text-muted",
+                style={"fontSize": "0.74rem"},
+            ),
+        ], xs=12, md=6, className="mt-2 mb-3"),
     ]),
     dbc.Row([
-        dbc.Col(dcc.Graph(id="chart-srisk-bar"), xs=12, md=7, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-srisk-pie"), xs=12, md=5, className="mb-3"),
+        dbc.Col([
+            html.P(
+                "Cross-sectional SRISK for the top 10 banks at the latest date in the selected range. "
+                "Bars show the estimated capital shortfall each institution would face under the chosen stress scenario.",
+                className="text-muted mb-1 mt-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-srisk-bar"),
+        ], xs=12, md=7, className="mb-3"),
+        dbc.Col([
+            html.P(
+                "Share of aggregate SRISK across institutions. "
+                "Highlights systemic risk concentration — a small number of banks typically account for the majority.",
+                className="text-muted mb-1 mt-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-srisk-pie"),
+        ], xs=12, md=5, className="mb-3"),
     ]),
-    dbc.Row([dbc.Col(dcc.Graph(id="chart-srisk-ts"), xs=12, className="mb-3")]),
+    dbc.Row([
+        dbc.Col([
+            html.Label("SRISK over time — view mode",
+                       className="text-muted mb-1",
+                       style={"fontSize": "0.78rem", "fontWeight": "600"}),
+            dbc.RadioItems(
+                id="srisk-ts-mode",
+                options=[
+                    {"label": " Aggregate",     "value": "aggregate"},
+                    {"label": " Stacked by bank", "value": "stacked"},
+                ],
+                value="aggregate",
+                inline=True,
+                inputClassName="me-1",
+                labelClassName="me-3",
+                labelStyle={"fontSize": "0.85rem", "fontWeight": "500"},
+            ),
+        ], xs=12, className="mb-2"),
+    ]),
+    dbc.Row([
+        dbc.Col([
+            html.P(
+                "SRISK through time for the selected banks. "
+                "Aggregate view shows total system-level stress; stacked view breaks it down by institution to reveal shifting contributions.",
+                className="text-muted mb-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-srisk-ts"),
+        ], xs=12, className="mb-3"),
+    ]),
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -549,7 +671,8 @@ srisk_layout = dbc.Container([
                     html.Br(),
                     "k = prudential capital ratio (slider above; default 8%) · "
                     "D = book liabilities · W = market cap · "
-                    "LRMES = 1 − exp(−22·MES)  [1-month horizon approximation]",
+                    "LRMES(t) = 1 − exp(log(1−d) · β(t)), d = 1-month decline "
+                    "threshold (slider above; default 40%), β from DCC-GJR-GARCH.",
                     html.Br(),
                     html.Span("Note: SRISK values are in USD.",
                               className="text-warning",
@@ -560,69 +683,66 @@ srisk_layout = dbc.Container([
     ]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
-market_layout = dbc.Container([
-    dbc.Row([dbc.Col(dcc.Graph(id="chart-prices"), xs=12, className="mt-3 mb-3")]),
-    dbc.Row([
-        dbc.Col(dcc.Graph(id="chart-returns-hist"), xs=12, md=6, className="mb-3"),
-        dbc.Col(dcc.Graph(id="chart-corr"),         xs=12, md=6, className="mb-3"),
-    ]),
-], fluid=True, style={"backgroundColor": BG_PAGE})
+# ── Market Data + DCC Correlation (combined) tab ─────────────────────────────
 
-
-# ── DCC Correlation tab ──────────────────────────────────────────────────────
-
-dcc_layout = dbc.Container([
-    dbc.Row([
-        dbc.Col([
-            html.Div([
-                html.P([
-                    html.B("DCC(1,1) time-varying correlation ρ(t) "),
-                    "between each bank and the market index. Rising ρ during "
-                    "stress episodes indicates comovement — the 'one-factor' "
-                    "regime in which diversification benefits collapse.",
-                ], className="text-muted mb-2",
-                   style={"fontSize": "0.85rem"}),
-            ], style=_card, className="mt-3"),
-        ], xs=12),
-    ]),
+market_dcc_layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             dbc.Checklist(
-                id="dcc-crises",
+                id="market-dcc-crises",
                 options=[{"label": " Shade crisis periods", "value": "show"}],
                 value=["show"], switch=True,
-                className="mb-2",
+                className="mb-2 mt-3",
             ),
         ], xs=12, md=4),
         dbc.Col([
-            dbc.Button("Download CSV", id="btn-download-dcc",
+            dbc.Button("Download DCC CSV", id="btn-download-dcc",
                        size="sm", color="primary", outline=True,
-                       className="float-end"),
+                       className="float-end mt-3"),
             dcc.Download(id="download-dcc"),
         ], xs=12, md=8),
     ]),
-    dbc.Row([dbc.Col(dcc.Graph(id="chart-dcc-rho"), xs=12, className="mb-3")]),
     dbc.Row([
         dbc.Col([
-            html.Div([
-                html.P([
-                    html.B("Average ρ across selected banks"),
-                    " — the mean correlation line is a simple systemic-risk "
-                    "barometer: sustained elevation above the long-run mean "
-                    "often precedes or accompanies crisis periods.",
-                ], className="text-muted mb-0",
-                   style={"fontSize": "0.82rem"}),
-            ], style=_card),
-        ], xs=12, className="mb-3"),
+            html.P(
+                "Three aligned panels: rebased price index (top), time-varying DCC correlation of each bank with the market (middle), "
+                "and the cross-sectional mean DCC correlation (bottom). All panels share a common time axis for direct comparison.",
+                className="text-muted mb-1 mt-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-market-dcc"),
+        ], xs=12, md=7, className="mb-3"),
+        dbc.Col([
+            html.P(
+                "Pairwise return correlations between selected banks over the chosen date range. "
+                "Warmer colours signal higher co-movement, which amplifies systemic contagion risk.",
+                className="text-muted mb-1 mt-1",
+                style={"fontSize": "0.78rem"},
+            ),
+            dcc.Graph(id="chart-corr"),
+        ], xs=12, md=5, className="mb-3"),
     ]),
-    dbc.Row([dbc.Col(dcc.Graph(id="chart-dcc-avg"), xs=12, className="mb-3")]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
 
 # ── Methodology tab ──────────────────────────────────────────────────────────
 
-def _formula_block(name: str, formula: str, note: str = "") -> html.Div:
-    return html.Div([
+def _var_legend(variables: list) -> html.P:
+    """Inline variable key: sym = meaning · sym = meaning · ..."""
+    parts = []
+    for i, (sym, meaning) in enumerate(variables):
+        if i > 0:
+            parts.append("  ·  ")
+        parts.append(html.B(sym, style={"fontFamily": "monospace",
+                                        "fontSize": "0.78rem"}))
+        parts.append(f" = {meaning}")
+    return html.P(parts, className="text-muted mb-0",
+                  style={"fontSize": "0.78rem", "lineHeight": "1.75"})
+
+
+def _formula_block(name: str, formula: str, description: str = "",
+                   variables: list | None = None, note: str = "") -> html.Div:
+    children = [
         html.P(name, className="mb-1",
                style={"fontWeight": "700", "fontSize": "0.95rem",
                       "color": TEXT_MAIN}),
@@ -632,9 +752,20 @@ def _formula_block(name: str, formula: str, note: str = "") -> html.Div:
                         "border": f"1px solid {BORDER}",
                         "fontSize": "0.85rem", "marginBottom": "6px",
                         "whiteSpace": "pre-wrap"}),
-        html.P(note, className="text-muted mb-3",
-               style={"fontSize": "0.82rem"}) if note else None,
-    ])
+    ]
+    if description:
+        children.append(html.P(description, className="text-muted mb-1",
+                               style={"fontSize": "0.83rem"}))
+    if variables:
+        children.append(_var_legend(variables))
+    if note:
+        children.append(
+            html.P(["ℹ ", note], className="text-muted mb-3 mt-1",
+                   style={"fontSize": "0.77rem", "fontStyle": "italic"})
+        )
+    else:
+        children.append(html.Div(className="mb-3"))
+    return html.Div(children)
 
 
 methodology_layout = dbc.Container([
@@ -656,52 +787,150 @@ methodology_layout = dbc.Container([
                         style={"fontWeight": "700"}),
                 _formula_block(
                     "GJR-GARCH(1,1,1)",
-                    "h_t = ω + α·ε²_{t-1} + γ·ε²_{t-1}·𝟙{ε_{t-1}<0} + β·h_{t-1}",
-                    "Fitted independently to market and firm log returns."),
+                    "h_t = ω + αg·ε²_{t-1} + γ·ε²_{t-1}·𝟙{ε_{t-1}<0} + βg·h_{t-1}\n"
+                    "σ_t = √h_t",
+                    description=(
+                        "Models time-varying conditional volatility with an asymmetric "
+                        "leverage effect: negative return shocks amplify future volatility "
+                        "more than positive shocks of equal magnitude. Fitted independently "
+                        "to the market index and each firm's return series (zero-mean assumption)."
+                    ),
+                    variables=[
+                        ("ω",        "long-run variance floor"),
+                        ("αg",       "ARCH effect — sensitivity to past shock size"),
+                        ("γ",        "leverage effect — extra amplification for negative shocks"),
+                        ("βg",       "GARCH persistence of conditional variance"),
+                        ("ε_t = r_t","return innovation (equals return under zero-mean)"),
+                        ("h_t",      "conditional variance"),
+                        ("𝟙{·}",    "indicator: 1 if condition holds, 0 otherwise"),
+                    ],
+                    note="αg and βg are GARCH parameters — distinct from the tail probability α "
+                         "used in MES and ΔCoVaR.",
+                ),
                 _formula_block(
-                    "DCC(1,1) correlation",
+                    "DCC(1,1) — Dynamic Conditional Correlation",
                     "Q_t = (1−a−b)·Q̄ + a·ε_{t-1}ε'_{t-1} + b·Q_{t-1}\n"
                     "ρ_t = Q_t[0,1] / √(Q_t[0,0]·Q_t[1,1])",
-                    "(a, b) maximise the Gaussian conditional log-likelihood."),
+                    description=(
+                        "Tracks the time-varying pairwise correlation between each bank "
+                        "and the market index after standardising for GARCH-fitted volatility. "
+                        "The pseudo-covariance matrix Q_t mean-reverts to its unconditional "
+                        "level Q̄, with the speed governed by the persistence parameter b."
+                    ),
+                    variables=[
+                        ("Q̄",   "unconditional covariance of standardised residuals (full-sample)"),
+                        ("ε_t", "standardised residual vector [r_m/σ_m, r_f/σ_f]"),
+                        ("a",   "DCC shock sensitivity"),
+                        ("b",   "DCC correlation persistence"),
+                        ("ρ_t", "dynamic conditional correlation between firm and market"),
+                    ],
+                    note="(a, b) are estimated by maximising the Gaussian DCC conditional log-likelihood.",
+                ),
 
                 html.Hr(),
                 html.H6("Systemic risk measures", className="mb-2 mt-3",
                         style={"fontWeight": "700"}),
                 _formula_block(
                     "MES — Marginal Expected Shortfall",
-                    "MES_i(t) = −min( σ_f(t)·ρ(t)·k₁ + σ_f(t)·√(1−ρ²)·k₂ , 0 )",
-                    "k₁, k₂ are Silverman-kernel weighted expectations of the "
-                    "standardised residuals conditional on the market return "
-                    "falling below its α-th percentile."),
+                    "z(t)     = √(1 − ρ(t)²)\n"
+                    "MES_i(t) = −min( σ_f(t)·ρ(t)·k₁ + σ_f(t)·z(t)·k₂ ,  0 )",
+                    description=(
+                        "The expected daily equity loss of the firm conditional on the "
+                        "market being in its worst α% of days. Time variation is driven "
+                        "entirely by the DCC-GJR-GARCH outputs — the kernel constants "
+                        "k₁ and k₂ are estimated once from the full sample."
+                    ),
+                    variables=[
+                        ("σ_f(t)", "firm conditional volatility from GJR-GARCH"),
+                        ("ρ(t)",   "DCC conditional correlation with market"),
+                        ("z(t)",   "idiosyncratic volatility weight = √(1−ρ²)"),
+                        ("k₁",     "kernel-weighted conditional mean of standardised market residuals"),
+                        ("k₂",     "kernel-weighted conditional mean of idiosyncratic residuals"),
+                        ("α",      "market tail probability (critical value, adjustable)"),
+                    ],
+                    note="Silverman bandwidth: h = σ_u·(4/3T)^0.2, "
+                         "σ_u = min(std(u), IQR(u)/1.349), u = r_m/σ_m.",
+                ),
                 _formula_block(
                     "LRMES — Long-Run MES",
-                    "β(t)    = ρ(t) · σ_f(t) / σ_m(t)\n"
-                    "LRMES(t) = 1 − exp(log(1−d) · β(t))",
-                    "Horizon stress d = 40% market decline; no simulation (closed-form approximation)."),
+                    "β(t)     = ρ(t) · σ_f(t) / σ_m(t)\n"
+                    "LRMES(t) = 1 − exp( log(1−d) · β(t) )  =  1 − (1−d)^{β(t)}",
+                    description=(
+                        "Approximates the expected equity loss over a multi-month stress "
+                        "horizon if the market falls by d, using a closed-form bivariate "
+                        "normal result that requires no simulation. All time variation "
+                        "enters through the DCC-implied conditional beta β(t)."
+                    ),
+                    variables=[
+                        ("β(t)",   "conditional market beta derived from DCC components"),
+                        ("ρ(t)",   "DCC conditional correlation"),
+                        ("σ_f(t)", "firm conditional volatility"),
+                        ("σ_m(t)", "market conditional volatility"),
+                        ("d",      "market decline threshold (default 40%, adjustable in SRISK tab)"),
+                    ],
+                    note="α-invariant: β(t) depends only on DCC outputs, not on the tail "
+                         "probability α. LRMES and SRISK therefore do not respond to α changes.",
+                ),
                 _formula_block(
-                    "SES — Systemic Expected Shortfall",
-                    "SES(t) = max(0, k·D(t)·(1+ΔD/D) − (1−k)·W(t)·(1+ΔW/W))",
-                    "k = 8% prudential ratio; D = book liabilities; W = market cap. "
-                    "SES = 0 is binding only when market equity exceeds the "
-                    "capital requirement, i.e. 'Not binding'."),
+                    "ΔCoVaR — Delta Conditional Value-at-Risk",
+                    "r̃_m = b₀ + b₁·r̃_f   (IRLS quantile regression at α)\n"
+                    "VaR_i(t)    = σ_f(t) · c_i     c_i = Quantileα( r̃_f / σ_f )\n"
+                    "CoVaR_i(t)  = b₀ + b₁ · VaR_i(t)\n"
+                    "ΔCoVaR_i(t) = b₁ · ( VaR_i(t) − Median_i )",
+                    description=(
+                        "Measures by how much the market's Value-at-Risk increases when "
+                        "bank i moves from its median state to a distressed state. "
+                        "IRLS quantile regression links demeaned bank returns to demeaned "
+                        "market returns at the chosen tail probability α."
+                    ),
+                    variables=[
+                        ("r̃_m, r̃_f", "demeaned daily log returns for market and firm"),
+                        ("b₀, b₁",    "quantile regression intercept and slope"),
+                        ("σ_f(t)",    "firm conditional volatility (time-varying VaR scaling)"),
+                        ("c_i",       "α-quantile of σ_f-standardised firm returns (full-sample constant)"),
+                        ("VaR_i(t)",  "time-varying firm Value-at-Risk"),
+                        ("Median_i",  "median of demeaned firm returns (normal-state benchmark)"),
+                        ("α",         "tail probability (critical value, adjustable)"),
+                    ],
+                    note="Precomputed on the full α grid {1%, 2.5%, 5%, 7.5%, 10%}; the active "
+                         "frame is swapped when α is changed. Optional macro state variables "
+                         "(rates, VIX, credit spread) can be included as additional regressors.",
+                ),
                 _formula_block(
-                    "CoVaR / ΔCoVaR",
-                    "r_m = b₀ + b₁·r_f  (quantile regression at α)\n"
-                    "VaR_i(t)    = σ_f(t)·c_i     with c_i = α-quantile of r_f/σ_f\n"
-                    "CoVaR_i(t)  = b₀ + b₁·VaR_i(t)\n"
-                    "ΔCoVaR_i(t) = b₁ · (VaR_i(t) − median_i)",
-                    "IRLS quantile regression (mirrors Belluzzo 2020 MATLAB). "
-                    "Currently cached at α = 5%; the α-slider does not recompute ΔCoVaR."),
+                    "SRISK — Capital Shortfall under Stress",
+                    "SRISK_i(t) = max( 0,  k·D̃(t) − (1−k)·(1−LRMES(t))·W(t) )",
+                    description=(
+                        "The equity capital shortfall of a bank if the market were to fall "
+                        "by d — the amount by which stressed equity would fall short of the "
+                        "prudential minimum. Only undercapitalised institutions (positive "
+                        "SRISK) contribute to aggregate systemic risk."
+                    ),
+                    variables=[
+                        ("k",        "prudential capital ratio (default 8%, adjustable)"),
+                        ("D̃(t)",    "forward-rolled book liabilities (quarterly step function)"),
+                        ("W(t)",     "market capitalisation (equity)"),
+                        ("LRMES(t)", "expected equity loss fraction under market stress"),
+                        ("d",        "market decline threshold (same as in LRMES, adjustable)"),
+                    ],
+                    note="D̃(t) uses a 3-month forward-rolling scheme matching "
+                         "Belluzzo's forward_roll_data.m. Note: D̃ (liabilities) is "
+                         "distinct from d (decline threshold).",
+                ),
                 _formula_block(
-                    "SRISK — Capital shortfall under stress",
-                    "SRISK(t) = max(0, k·D̃(t) − (1−k)·(1−LRMES(t))·W(t))",
-                    "D̃ = forward-rolled liabilities (quarterly step function, "
-                    "matches Belluzzo's forward_roll_data.m). "
-                    "k = 8%, LRMES as above."),
-                _formula_block(
-                    "LVG — Quasi-leverage",
-                    "LVG(t) = (D(t) + W(t)) / W(t)",
-                    "Matches NYU Stern V-Lab's LVG column."),
+                    "LVG — Quasi-Leverage",
+                    "LVG(t) = ( D(t) + W(t) ) / W(t)",
+                    description=(
+                        "The ratio of quasi-total assets (liabilities plus equity) to equity, "
+                        "measuring how much a firm's equity cushion must absorb in a tail event. "
+                        "A higher LVG indicates greater fragility to adverse shocks."
+                    ),
+                    variables=[
+                        ("D(t)",       "book liabilities (quarterly filings, forward-filled daily)"),
+                        ("W(t)",       "market capitalisation"),
+                        ("D(t)+W(t)",  "quasi-total assets"),
+                    ],
+                    note="Matches the LVG column published by NYU Stern V-Lab.",
+                ),
 
                 html.Hr(),
                 html.H6("Data sources", className="mb-2 mt-3",
@@ -760,10 +989,17 @@ methodology_layout = dbc.Container([
                         style={"fontWeight": "700"}),
                 html.Ul([
                     html.Li(["Prudential capital ratio ", html.B("k = 8%")]),
-                    html.Li(["LRMES stress threshold ", html.B("d = 40% (1-month)")]),
+                    html.Li(["LRMES decline threshold ", html.B("d = 40% (default)"),
+                             " — adjustable in the SRISK tab"]),
                     html.Li(["Forward-roll frequency ", html.B("3 months (quarterly filings)")]),
                     html.Li(["Default critical value ", html.B("α = 5%"),
-                             " (adjustable via slider for MES, LRMES, SES, SRISK)"]),
+                             " — selectable from {1%, 2.5%, 5%, 7.5%, 10%}. ",
+                             "α drives the market-tail quantile used by MES and ΔCoVaR. ",
+                             html.B("LRMES and SRISK are α-invariant"),
+                             " under this closed form — their magnitude is set by the ",
+                             "fixed decline threshold ", html.B("d = 40%"),
+                             " and the DCC components (ρ, σ_f, σ_m), per ",
+                             "Brownlees & Engle (2017) and Belluzzo (2020)."]),
                     html.Li(["Estimation window: rolling 5 years of daily log returns"]),
                 ], style={"fontSize": "0.85rem", "color": TEXT_MUTED}),
             ], style=_card),
@@ -800,11 +1036,10 @@ app.layout = html.Div([
         overlay_style={"opacity": 0, "backgroundColor": "transparent"},
         children=dbc.Tabs([
             dbc.Tab(overview_layout,    label="Overview",        tab_id="tab-overview"),
-            dbc.Tab(timeseries_layout,  label="Time Series",     tab_id="tab-ts"),
-            dbc.Tab(srisk_layout,       label="SRISK",           tab_id="tab-srisk"),
-            dbc.Tab(dcc_layout,         label="DCC Correlation", tab_id="tab-dcc"),
-            dbc.Tab(market_layout,      label="Market Data",     tab_id="tab-market"),
-            dbc.Tab(methodology_layout, label="Methodology",     tab_id="tab-methodology"),
+            dbc.Tab(timeseries_layout,    label="Time Series",          tab_id="tab-ts"),
+            dbc.Tab(srisk_layout,         label="SRISK",               tab_id="tab-srisk"),
+            dbc.Tab(market_dcc_layout,    label="Market & Correlation", tab_id="tab-market"),
+            dbc.Tab(methodology_layout,   label="Methodology",          tab_id="tab-methodology"),
         ], id="main-tabs", active_tab="tab-overview",
            style={"paddingLeft": "1rem", "backgroundColor": "#f8f9fa",
                   "borderBottom": f"1px solid {BORDER}"}),
@@ -1247,20 +1482,24 @@ def poll_refresh(_n, current):
 @app.callback(
     Output("alpha-store", "data"),
     Output("alpha-label", "children"),
-    Input("alpha-slider", "value"),
+    Input("alpha-select", "value"),
     prevent_initial_call=True,
 )
-def update_alpha(alpha_pct):
-    """Recompute MES/LRMES/SES/SRISK for new α; snap ΔCoVaR to nearest grid point."""
+def update_alpha(alpha):
+    """Recompute MES and swap in the precomputed ΔCoVaR for the selected
+    α ∈ {1, 2.5, 5, 7.5, 10}%. LRMES (and therefore SRISK) are α-invariant
+    under the Belluzzo/Brownlees–Engle closed form — their magnitude is set
+    by the fixed decline threshold d = 40% and the DCC components (ρ, σ_f,
+    σ_m). We still call recompute_for_alpha to refresh cached outputs, but
+    LRMES/SRISK values are unchanged by α."""
     global MEASURES
-    alpha = alpha_pct / 100.0
-    snap  = _nearest_alpha(alpha)
-    print(f"\n[α] Recomputing MES/LRMES/SES/SRISK for α={alpha:.3f}; ΔCoVaR snapped to {snap:.3f}")
+    alpha_pct = alpha * 100.0
+    print(f"\n[α] Recomputing MES & ΔCoVaR for α={alpha:.3f}")
     new = M.recompute_for_alpha(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS, alpha=alpha)
-    # Swap in the precomputed ΔCoVaR for the nearest grid alpha
-    snap_df = DCOVAR_BY_ALPHA.get(round(snap, 4))
-    if snap_df is not None:
-        new["delta_covar"] = snap_df
+    # ΔCoVaR is precomputed on the exact α grid — pull the matching frame.
+    dcovar_df = DCOVAR_BY_ALPHA.get(round(alpha, 4))
+    if dcovar_df is not None:
+        new["delta_covar"] = dcovar_df
     for key in new:
         base = MEASURES.get(key)
         if base is None or base.empty:
@@ -1272,8 +1511,8 @@ def update_alpha(alpha_pct):
         MEASURES[key] = updated
     print("[α] Done.")
     return alpha, (
-        f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days). "
-        f"ΔCoVaR uses nearest grid α = {snap*100:.1f}%."
+        f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days) — "
+        f"applies to MES & ΔCoVaR; LRMES/SRISK are α-invariant (driven by d = 40%)."
     )
 
 
@@ -1282,12 +1521,11 @@ def update_alpha(alpha_pct):
 @app.callback(
     Output("kpi-mes",          "children"),
     Output("kpi-lrmes",        "children"),
-    Output("kpi-ses",          "children"),
     Output("kpi-covar",        "children"),
     Output("kpi-srisk",        "children"),
     Output("kpi-leverage",     "children"),
     Output("chart-mes-rank",   "figure"),
-    Output("chart-ses-rank",   "figure"),
+    Output("chart-srisk-rank", "figure"),
     Output("chart-covar-rank", "figure"),
     Output("chart-mes-dw",     "figure"),
     Output("chart-srisk-dw",   "figure"),
@@ -1303,21 +1541,18 @@ def update_overview(start, end, tickers, _refresh, _alpha):
     tickers = tickers or []
     mes_df    = _slice(MEASURES["mes"],         start, end, tickers)
     lrmes_df  = _slice(MEASURES.get("lrmes", pd.DataFrame()), start, end, tickers)
-    ses_df    = _slice(MEASURES["ses"],         start, end, tickers)
     dcovar_df = _slice(MEASURES["delta_covar"], start, end, tickers)
     srisk_df  = _slice(MEASURES["srisk"],       start, end, tickers)
     lvg_df    = _slice(LEVERAGE,                start, end, tickers) if not LEVERAGE.empty else pd.DataFrame()
 
     latest_mes   = _latest_row(mes_df)
     latest_lrmes = _latest_row(lrmes_df)
-    latest_ses   = _latest_row(ses_df)
     latest_covar = _latest_row(dcovar_df)
     latest_srisk = _latest_row(srisk_df)
     latest_lvg   = _latest_row(lvg_df)
 
     agg_mes   = latest_mes.mean()
     agg_lrmes = latest_lrmes.mean() if not latest_lrmes.empty else float("nan")
-    agg_ses   = latest_ses[latest_ses > 0].mean() if (latest_ses > 0).any() else float("nan")
     agg_covar = latest_covar.mean()
     agg_srisk = latest_srisk.sum()
     agg_lvg   = latest_lvg.mean() if not latest_lvg.empty else float("nan")
@@ -1330,10 +1565,6 @@ def update_overview(start, end, tickers, _refresh, _alpha):
                         _fmt_pct(agg_lrmes),
                         "Long-run MES at 40% market decline",
                         "#ad1457")
-    kpi_ses  = kpi_card("Avg. SES (binding)",
-                        _fmt_ses(agg_ses),
-                        "Capital shortfall (mean of banks with SES > 0)",
-                        "#6a1b9a")
     kpi_cov  = kpi_card("Avg. |ΔCoVaR| (latest)",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                         "Mean marginal systemic contribution",
@@ -1350,13 +1581,13 @@ def update_overview(start, end, tickers, _refresh, _alpha):
     # Overview ranking bars — show only the top 10 banks per measure
     _TOP_N = 10
     _mes_top   = latest_mes.dropna().nlargest(_TOP_N)
-    _ses_pos   = latest_ses[latest_ses > 0].dropna()
-    _ses_top   = _ses_pos.nlargest(_TOP_N)
     _covar_abs = latest_covar.abs().dropna()
     _covar_top = _covar_abs.nlargest(_TOP_N)
+    _srisk_pos = latest_srisk[latest_srisk > 0].dropna()
+    _srisk_top = _srisk_pos.nlargest(_TOP_N)
 
     fig_mes   = ranking_bar(_mes_top,   "MES Ranking — Top 10 (latest)",        "MES")
-    fig_ses   = ranking_bar(_ses_top,   "SES Ranking — Top 10 (latest)",        "SES (capital shortfall)", fmt_fn=_fmt_bn)
+    fig_srisk = ranking_bar(_srisk_top, "SRISK Ranking — Top 10 (latest)",      "SRISK (bn)", fmt_fn=_fmt_bn)
     fig_covar = ranking_bar(_covar_top, "|ΔCoVaR| Ranking — Top 10 (latest)",   "|ΔCoVaR|")
 
     # ── Δ-last-week / Δ-last-month deltas ─────────────────────────────────────
@@ -1383,7 +1614,7 @@ def update_overview(start, end, tickers, _refresh, _alpha):
 
     # Summary table as sortable DataTable with Δ-week / Δ-month columns
     all_tickers = sorted(
-        set(latest_mes.index) | set(latest_ses.index) | set(latest_covar.index)
+        set(latest_mes.index) | set(latest_covar.index)
     )
     table_rows = []
     for t in all_tickers:
@@ -1394,7 +1625,6 @@ def update_overview(start, end, tickers, _refresh, _alpha):
             "mes_dw":    float(d_mes_w.get(t,      np.nan)) if pd.notna(d_mes_w.get(t,      np.nan)) else None,
             "mes_dm":    float(d_mes_m.get(t,      np.nan)) if pd.notna(d_mes_m.get(t,      np.nan)) else None,
             "lrmes":     float(latest_lrmes.get(t, np.nan)) if pd.notna(latest_lrmes.get(t, np.nan)) else None,
-            "ses_bn":    (float(latest_ses.get(t,  np.nan)) / 1e9) if pd.notna(latest_ses.get(t,  np.nan)) else None,
             "covar":     float(latest_covar.get(t, np.nan)) if pd.notna(latest_covar.get(t, np.nan)) else None,
             "covar_dw":  float(d_cov_w.get(t,      np.nan)) if pd.notna(d_cov_w.get(t,      np.nan)) else None,
             "srisk_bn":  (float(latest_srisk.get(t, np.nan)) / 1e9) if pd.notna(latest_srisk.get(t, np.nan)) else None,
@@ -1418,7 +1648,6 @@ def update_overview(start, end, tickers, _refresh, _alpha):
         {"name": "Δ MES (1w)",   "id": "mes_dw",    "type": "numeric", "format": pct_signed},
         {"name": "Δ MES (1m)",   "id": "mes_dm",    "type": "numeric", "format": pct_signed},
         {"name": "LRMES",        "id": "lrmes",     "type": "numeric", "format": pct_fmt},
-        {"name": "SES (bn)",     "id": "ses_bn",    "type": "numeric", "format": num_fmt2},
         {"name": "ΔCoVaR",       "id": "covar",     "type": "numeric", "format": pct_fmt},
         {"name": "Δ ΔCoVaR (1w)","id": "covar_dw",  "type": "numeric", "format": pct_signed},
         {"name": "SRISK (bn)",   "id": "srisk_bn",  "type": "numeric", "format": num_fmt2},
@@ -1478,10 +1707,25 @@ def update_overview(start, end, tickers, _refresh, _alpha):
     fig_srisk_dw = delta_ranking_bar(_top_by_abs(d_sri_w), "Δ SRISK (1w) — Top 10",   "Δ SRISK (bn)", divide_bn=True)
     fig_covar_dw = delta_ranking_bar(_top_by_abs(d_cov_w), "Δ ΔCoVaR (1w) — Top 10", "Δ ΔCoVaR (pp)")
 
-    return (kpi_mes, kpi_lrmes, kpi_ses, kpi_cov, kpi_srisk, kpi_lvg,
-            fig_mes, fig_ses, fig_covar,
+    return (kpi_mes, kpi_lrmes, kpi_cov, kpi_srisk, kpi_lvg,
+            fig_mes, fig_srisk, fig_covar,
             fig_mes_dw, fig_srisk_dw, fig_covar_dw,
             table)
+
+
+# ── Risk Summary collapse toggle ──────────────────────────────────────────────
+
+@app.callback(
+    Output("risk-summary-collapse", "is_open"),
+    Output("risk-summary-caret",    "children"),
+    Input("btn-risk-summary",       "n_clicks"),
+    State("risk-summary-collapse",  "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_risk_summary(_n_clicks, is_open):
+    new_open = not is_open
+    caret = "▾" if new_open else "▸"
+    return new_open, caret
 
 
 # ── Time series tab ───────────────────────────────────────────────────────────
@@ -1509,19 +1753,14 @@ def update_timeseries(start, end, tickers, measure, overlay, crises,
     labels = {
         "mes":         ("MES",       "MES (loss fraction)"),
         "lrmes":       ("LRMES",     "LRMES (fraction, 1-month stress)"),
-        "ses":         ("SES",       "SES (capital shortfall)"),
         "delta_covar": ("ΔCoVaR",    "ΔCoVaR"),
         "covar":       ("CoVaR",     "CoVaR"),
     }
     label, ylabel = labels.get(measure, (measure, measure))
 
-    # Portfolio aggregate:
-    #   SES is a USD capital-shortfall dollar amount → cumulative across banks.
-    #   Everything else (MES, LRMES, ΔCoVaR, CoVaR) is a fraction/level → mean.
     _AGG_MODE = {
         "mes":         ("mean", "Mean"),
         "lrmes":       ("mean", "Mean"),
-        "ses":         ("sum",  "Total"),
         "delta_covar": ("mean", "Mean"),
         "covar":       ("mean", "Mean"),
     }
@@ -1564,14 +1803,23 @@ def update_timeseries(start, end, tickers, measure, overlay, crises,
 # ── SRISK tab ─────────────────────────────────────────────────────────────────
 
 
-def _compute_srisk_df(k: float) -> pd.DataFrame:
+_D_BASE = 0.40  # LRMES decline threshold used to build MEASURES["lrmes"].
+
+
+def _compute_srisk_df(k: float, d: float = _D_BASE) -> pd.DataFrame:
     """
-    Recompute SRISK across all banks for a user-selected prudential ratio k.
+    Recompute SRISK across all banks for user-selected prudential ratio k and
+    LRMES decline threshold d.
 
     Vectorised equivalent of :func:`systemic_measures.compute_srisk` applied
     column-wise:
 
-        SRISK(t) = max(0, k·LBR(t) − (1−k)·(1−LRMES(t))·MC(t))
+        SRISK(t) = max(0, k·LBR(t) − (1−k)·(1−LRMES(t; d))·MC(t))
+
+    LRMES is rescaled analytically from the cached d = 40 % series via
+        LRMES(t; d) = 1 − (1 − LRMES₀(t))^(log(1−d) / log(1−0.40))
+    which is exact under the Brownlees–Engle / Belluzzo closed form
+    (β(t) is independent of d).
 
     Returns an empty DataFrame if the upstream global series aren't populated
     yet (pre-refresh state).
@@ -1589,6 +1837,12 @@ def _compute_srisk_df(k: float) -> pd.DataFrame:
            .intersection(LBR_DAILY.index)
            .intersection(MC_TS.index))
     lr  = lrmes_df.reindex(index=idx, columns=cols).clip(0.0, 1.0)
+    # Rescale cached LRMES (built with d = _D_BASE) to the requested d.
+    if not np.isclose(d, _D_BASE):
+        d = float(np.clip(d, 1e-4, 0.999))
+        exponent = np.log(1.0 - d) / np.log(1.0 - _D_BASE)
+        lr = 1.0 - np.power(np.clip(1.0 - lr, 1e-12, 1.0), exponent)
+        lr = lr.clip(0.0, 1.0)
     lb  = LBR_DAILY.reindex(index=idx, columns=cols)
     cap = MC_TS.reindex(index=idx, columns=cols)
     srisk = k * lb - (1.0 - k) * (1.0 - lr) * cap
@@ -1600,19 +1854,23 @@ def _compute_srisk_df(k: float) -> pd.DataFrame:
     Output("chart-srisk-pie", "figure"),
     Output("chart-srisk-ts",  "figure"),
     Output("srisk-k-label",   "children"),
+    Output("srisk-d-label",   "children"),
     Input("date-range",    "start_date"),
     Input("date-range",    "end_date"),
     Input("bank-select",   "value"),
     Input("srisk-norm",    "value"),
     Input("srisk-k-slider","value"),
+    Input("srisk-d-slider","value"),
+    Input("srisk-ts-mode", "value"),
     Input("refresh-store", "data"),
     Input("alpha-store",   "data"),
 )
-def update_srisk(start, end, tickers, norm, k_pct, _refresh, _alpha):
+def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh, _alpha):
     tickers = tickers or []
-    # Convert slider (percent) to ratio; recompute SRISK for this k.
+    # Convert slider values (percent) to ratios; recompute SRISK for this (k, d).
     k = float(k_pct) / 100.0 if k_pct is not None else 0.08
-    srisk_all = _compute_srisk_df(k)
+    d = float(d_pct) / 100.0 if d_pct is not None else _D_BASE
+    srisk_all = _compute_srisk_df(k, d)
     if srisk_all.empty:
         srisk_all = MEASURES.get("srisk", pd.DataFrame())
     df      = _slice(srisk_all, start, end, tickers)
@@ -1622,150 +1880,106 @@ def update_srisk(start, end, tickers, norm, k_pct, _refresh, _alpha):
     if norm == "pct_agg":
         total = latest.sum()
         latest_disp = (latest / total * 100.0) if total > 0 else latest * np.nan
-        title_bar = "SRISK by Bank (% of aggregate SRISK)"
+        title_bar = "SRISK by Bank — Top 10 (% of aggregate SRISK)"
         xlabel_bar = "% of aggregate SRISK"
         fmt_bar = _fmt_pct_raw
     elif norm == "pct_mc":
         mc_aligned = mc_latest.reindex(latest.index)
         latest_disp = (latest / mc_aligned.where(mc_aligned > 0, np.nan)) * 100.0
-        title_bar = "SRISK by Bank (% of own market cap)"
+        title_bar = "SRISK by Bank — Top 10 (% of own market cap)"
         xlabel_bar = "% of market cap"
         fmt_bar = _fmt_pct_raw
     else:  # 'abs'
         latest_disp = latest / 1e9
-        title_bar = "SRISK by Bank (USD bn)"
+        title_bar = "SRISK by Bank — Top 10 (USD bn)"
         xlabel_bar = "SRISK (bn USD)"
         fmt_bar = _fmt_bn_x1  # already in bn
 
-    fig_bar = _srisk_bar_generic(latest_disp, title_bar, xlabel_bar, fmt_bar, norm)
-    fig_pie = srisk_pie(latest)  # pie always uses absolute values for share
+    # Restrict the bar chart to the top 10 banks by displayed value.
+    bar_series = latest_disp.dropna().sort_values(ascending=False).head(10)
+    fig_bar = _srisk_bar_generic(bar_series, title_bar, xlabel_bar, fmt_bar, norm)
+    # Pie: top 5 individual + 'Other' bucket for the rest.
+    fig_pie = srisk_pie(latest, top_n=5)
 
-    agg = df.sum(axis=1)
-    if norm == "pct_mc":
-        mc_total = MC_TS[[c for c in df.columns if c in MC_TS.columns]].reindex(df.index).ffill().sum(axis=1)
-        y_ts = (agg / mc_total.where(mc_total > 0, np.nan)) * 100.0
-        y_label = "Aggregate SRISK (% of total market cap)"
-        y_hover = "%{y:.2f}%"
-    else:
-        y_ts = agg.values / 1e9
-        y_label = "Aggregate SRISK (bn USD)"
-        y_hover = "%{y:.1f} bn"
+    # ── SRISK over time: aggregate or stacked ────────────────────────────────
+    if ts_mode == "stacked":
+        mc_cols  = [c for c in df.columns if c in MC_TS.columns]
+        mc_total = (MC_TS[mc_cols].reindex(df.index).ffill().sum(axis=1)
+                    if mc_cols else None)
+        y_unit = {"abs": "bn", "pct_agg": "pct_agg", "pct_mc": "pct_mc"}.get(norm, "bn")
+        fig_ts = srisk_stacked_area(
+            df,
+            y_unit=y_unit,
+            total_mc_ts=mc_total,
+            top_n=10,
+            show_crises=True,
+            data_start=start, data_end=end,
+        )
+    else:  # aggregate
+        agg = df.sum(axis=1)
+        if norm == "pct_mc":
+            mc_total = MC_TS[[c for c in df.columns if c in MC_TS.columns]].reindex(df.index).ffill().sum(axis=1)
+            y_ts = (agg / mc_total.where(mc_total > 0, np.nan)) * 100.0
+            y_label = "Aggregate SRISK (% of total market cap)"
+            y_hover = "%{y:.2f}%"
+        else:
+            y_ts = agg.values / 1e9
+            y_label = "Aggregate SRISK (bn USD)"
+            y_hover = "%{y:.1f} bn"
 
-    fig_ts = go.Figure(go.Scatter(
-        x=agg.index, y=y_ts,
-        fill="tozeroy",
-        fillcolor="rgba(198,40,40,0.12)",
-        line=dict(color="#c62828", width=2),
-        hovertemplate=f"Date: %{{x}}<br>Total: {y_hover}<extra></extra>",
-    ))
-    _add_crisis_overlays(fig_ts, start, end)
-    fig_ts.update_layout(
-        title=dict(text="Aggregate SRISK over Time",
-                   font=dict(size=14)),
-        yaxis_title=y_label,
-        height=300,
-        **_base_layout(),
-    )
+        fig_ts = go.Figure(go.Scatter(
+            x=agg.index, y=y_ts,
+            fill="tozeroy",
+            fillcolor="rgba(198,40,40,0.12)",
+            line=dict(color="#c62828", width=2),
+            name="Aggregate",
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: Aggregate<br>"
+                f"Value: {y_hover}<extra></extra>"
+            ),
+        ))
+        _add_crisis_overlays(fig_ts, start, end)
+        fig_ts.update_layout(
+            title=dict(text="Aggregate SRISK over Time",
+                       font=dict(size=14)),
+            yaxis_title=y_label,
+            height=360,
+            **_base_layout(),
+        )
 
     k_label = f"Prudential capital ratio  k = {k * 100:.1f}%"
-    return fig_bar, fig_pie, fig_ts, k_label
+    d_label = f"LRMES decline threshold  d = {d * 100:.1f}%"
+    return fig_bar, fig_pie, fig_ts, k_label, d_label
 
 
 # ── Market data tab ───────────────────────────────────────────────────────────
 
+# ── Market Data + DCC Correlation (combined) tab ─────────────────────────────
+
 @app.callback(
-    Output("chart-prices",       "figure"),
-    Output("chart-returns-hist", "figure"),
-    Output("chart-corr",         "figure"),
-    Input("date-range",    "start_date"),
-    Input("date-range",    "end_date"),
-    Input("bank-select",   "value"),
-    Input("refresh-store", "data"),
-    Input("alpha-store",   "data"),
+    Output("chart-market-dcc", "figure"),
+    Output("chart-corr",       "figure"),
+    Input("date-range",        "start_date"),
+    Input("date-range",        "end_date"),
+    Input("bank-select",       "value"),
+    Input("market-dcc-crises", "value"),
+    Input("refresh-store",     "data"),
+    Input("alpha-store",       "data"),
 )
-def update_market(start, end, tickers, _refresh, _alpha):
+def update_market_dcc_tab(start, end, tickers, crises, _refresh, _alpha):
     tickers = tickers or []
     keep    = tickers + [MARKET_NAME]
-    prices  = _slice(PRICES,   start, end, keep)
-    rets    = _slice(RETURNS,  start, end, tickers)
-
-    return price_chart(prices), return_hist(rets, tickers), corr_heatmap(rets)
-
-
-# ── DCC Correlation tab ───────────────────────────────────────────────────────
-
-@app.callback(
-    Output("chart-dcc-rho", "figure"),
-    Output("chart-dcc-avg", "figure"),
-    Input("date-range",    "start_date"),
-    Input("date-range",    "end_date"),
-    Input("bank-select",   "value"),
-    Input("dcc-crises",    "value"),
-    Input("refresh-store", "data"),
-)
-def update_dcc_tab(start, end, tickers, crises, _refresh):
-    tickers = tickers or []
-    empty = go.Figure().update_layout(title="No DCC ρ data", **_base_layout())
-    if DCC_RHO.empty:
-        return empty, empty
-
-    df = _slice(DCC_RHO, start, end, tickers)
-    if df.empty:
-        return empty, empty
+    prices  = _slice(PRICES,  start, end, keep)
+    rets    = _slice(RETURNS, start, end, tickers)
+    dcc_df  = _slice(DCC_RHO, start, end, tickers) if not DCC_RHO.empty else pd.DataFrame()
 
     show_crises = bool(crises and "show" in crises)
 
-    # ρ per bank
-    fig_rho = go.Figure()
-    for ticker in df.columns:
-        s = df[ticker].dropna()
-        if s.empty:
-            continue
-        fig_rho.add_trace(go.Scatter(
-            x=s.index, y=s.values,
-            name=_name(ticker),
-            line=dict(color=_color(ticker), width=1.6),
-            hovertemplate=f"{_name(ticker)}: %{{y:.3f}}<extra></extra>",
-        ))
-    if show_crises:
-        _add_crisis_overlays(fig_rho, start, end)
-    fig_rho.update_layout(
-        title=dict(text=f"DCC ρ(t) — Correlation with {MARKET_NAME}",
-                   font=dict(size=14)),
-        yaxis_title="ρ(t)",
-        yaxis=dict(range=[-0.2, 1.0]),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=11),
-        height=420,
-        **_base_layout(),
+    return (
+        market_dcc_chart(prices, dcc_df, show_crises, start, end),
+        corr_heatmap(rets),
     )
-
-    # Mean ρ across selected banks
-    avg = df.mean(axis=1)
-    fig_avg = go.Figure(go.Scatter(
-        x=avg.index, y=avg.values,
-        line=dict(color="#0d47a1", width=2),
-        fill="tozeroy",
-        fillcolor="rgba(13, 71, 161, 0.08)",
-        hovertemplate="Date: %{x}<br>Mean ρ: %{y:.3f}<extra></extra>",
-    ))
-    if not avg.empty:
-        fig_avg.add_hline(y=float(avg.mean()), line_dash="dot",
-                          line_color="#555",
-                          annotation_text="Sample mean",
-                          annotation_position="top left",
-                          annotation_font_size=10)
-    if show_crises:
-        _add_crisis_overlays(fig_avg, start, end)
-    fig_avg.update_layout(
-        title=dict(text="Average DCC ρ across selected banks",
-                   font=dict(size=14)),
-        yaxis_title="Mean ρ(t)",
-        yaxis=dict(range=[-0.2, 1.0]),
-        height=300,
-        **_base_layout(),
-    )
-    return fig_rho, fig_avg
 
 
 @app.callback(
@@ -1807,7 +2021,7 @@ def _csv_download(df: pd.DataFrame, filename: str) -> dict:
 def download_overview_csv(_n, start, end, tickers):
     tickers = tickers or []
     frames = []
-    for key in ("mes", "lrmes", "ses", "delta_covar", "srisk"):
+    for key in ("mes", "lrmes", "delta_covar", "srisk"):
         m_df = MEASURES.get(key)
         if m_df is None or m_df.empty:
             continue
@@ -1852,12 +2066,14 @@ def download_ts_csv(_n, start, end, tickers, measure):
     State("date-range",  "end_date"),
     State("bank-select", "value"),
     State("srisk-k-slider", "value"),
+    State("srisk-d-slider", "value"),
     prevent_initial_call=True,
 )
-def download_srisk_csv(_n, start, end, tickers, k_pct):
+def download_srisk_csv(_n, start, end, tickers, k_pct, d_pct):
     tickers = tickers or []
     k = float(k_pct) / 100.0 if k_pct is not None else 0.08
-    srisk_all = _compute_srisk_df(k)
+    d = float(d_pct) / 100.0 if d_pct is not None else _D_BASE
+    srisk_all = _compute_srisk_df(k, d)
     if srisk_all.empty:
         srisk_all = MEASURES.get("srisk", pd.DataFrame())
     df = _slice(srisk_all, start, end, tickers)
@@ -1867,7 +2083,10 @@ def download_srisk_csv(_n, start, end, tickers, k_pct):
     df["Aggregate"] = df.sum(axis=1)
     df.index.name = "Date"
     stamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
-    return _csv_download(df, f"srisk_timeseries_k{int(round(k*1000))}bp_{stamp}.csv")
+    return _csv_download(
+        df,
+        f"srisk_timeseries_k{int(round(k*1000))}bp_d{int(round(d*1000))}bp_{stamp}.csv",
+    )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

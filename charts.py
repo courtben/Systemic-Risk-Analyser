@@ -227,6 +227,9 @@ def timeseries_chart(
     has_agg = aggregate is not None and not aggregate.dropna().empty
     bank_width   = 1.4 if has_agg else 1.8
     bank_opacity = 0.55 if has_agg else 1.0
+    # Pull the numeric precision from the aggregate hover template (e.g.
+    # "%{y:.4f}" → ".4f") so per-bank hovers share the same formatting.
+    bank_hover_fmt = aggregate_hover_fmt
     for ticker in df.columns:
         s = df[ticker].dropna()
         fig.add_trace(go.Scatter(
@@ -234,7 +237,12 @@ def timeseries_chart(
             name=name_for(ticker),
             line=dict(color=color_for(ticker), width=bank_width),
             opacity=bank_opacity,
-            hovertemplate=f"{name_for(ticker)}: %{{y:.4f}}<extra></extra>",
+            showlegend=False,
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {name_for(ticker)}<br>"
+                f"Value: {bank_hover_fmt}<extra></extra>"
+            ),
         ), row=1, col=1)
 
     # Portfolio aggregate — added last so it paints on top. Thick dark line
@@ -254,7 +262,12 @@ def timeseries_chart(
             x=agg_s.index, y=agg_s.values,
             name=aggregate_label,
             line=dict(color="#0d1b5e", width=3.2),
-            hovertemplate=f"<b>{aggregate_label}</b>: {aggregate_hover_fmt}<extra></extra>",
+            showlegend=False,
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {aggregate_label}<br>"
+                f"Value: {aggregate_hover_fmt}<extra></extra>"
+            ),
         ), row=1, col=1)
 
     if market_ret is not None:
@@ -264,7 +277,12 @@ def timeseries_chart(
             name=_D.MARKET_NAME,
             marker_color=clrs,
             opacity=0.55,
-            hovertemplate=f"{_D.MARKET_NAME}: %{{y:.4f}}<extra></extra>",
+            showlegend=False,
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {_D.MARKET_NAME}<br>"
+                f"Value: %{{y:.4f}}<extra></extra>"
+            ),
         ), row=2, col=1)
         fig.update_yaxes(title_text="Mkt Return", row=2, col=1, title_font_size=11)
 
@@ -274,8 +292,7 @@ def timeseries_chart(
     fig.update_layout(
         title=dict(text=title, font=dict(size=14)),
         yaxis_title=ylabel,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=11),
+        showlegend=False,
         height=480,
         **base_layout(),
     )
@@ -338,21 +355,126 @@ def srisk_bar(series: pd.Series, title: str) -> go.Figure:
     return fig
 
 
-def srisk_pie(series: pd.Series) -> go.Figure:
+def srisk_pie(series: pd.Series, top_n: int = 5) -> go.Figure:
+    """SRISK share pie: keep the top ``top_n`` banks individually and
+    collapse the remaining positive-SRISK banks into a single 'Other' slice."""
     s = series.dropna()
-    s = s[s > 0]
+    s = s[s > 0].sort_values(ascending=False)
     if s.empty:
         return go.Figure().update_layout(title="No positive SRISK", **base_layout())
-    labels = [name_for(t) for t in s.index]
+
+    top   = s.head(top_n)
+    other = s.iloc[top_n:]
+
+    labels = [name_for(t) for t in top.index]
+    values = list(top.values)
+    colors = [color_for(t) for t in top.index]
+
+    if not other.empty:
+        labels.append(f"Other ({len(other)})")
+        values.append(float(other.sum()))
+        colors.append("#b0b7c3")
+
     fig = go.Figure(go.Pie(
-        labels=labels, values=s.values,
-        marker_colors=[color_for(t) for t in s.index],
+        labels=labels, values=values,
+        marker_colors=colors,
         textinfo="label+percent",
         hovertemplate="%{label}: %{value:.2e} (%{percent})<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text="SRISK Share (%)", font=dict(size=14)),
+        title=dict(text=f"SRISK Share (%) — Top {top_n} + Other",
+                   font=dict(size=14)),
         height=320,
+        **base_layout(),
+    )
+    return fig
+
+
+def srisk_stacked_area(
+    df: pd.DataFrame,
+    y_unit: str = "bn",
+    total_mc_ts: pd.Series | None = None,
+    top_n: int = 10,
+    show_crises: bool = False,
+    data_start=None,
+    data_end=None,
+) -> go.Figure:
+    """Per-bank stacked area of SRISK over time.
+
+    ``y_unit`` controls the y-axis:
+      - "bn"       → stacked SRISK in USD billions
+      - "pct_agg"  → stacked share of aggregate SRISK (sums to 100%)
+      - "pct_mc"   → each bank's SRISK divided by total market cap
+
+    Keeps the top ``top_n`` banks (ranked by mean SRISK over the window)
+    and rolls the remainder into an 'Other' series.
+    """
+    if df.empty:
+        return go.Figure().update_layout(title="No SRISK data", **base_layout())
+
+    # Rank by mean over the window — largest contributors surface first.
+    means   = df.mean(axis=0).dropna()
+    ordered = means.sort_values(ascending=False).index.tolist()
+    top     = [t for t in ordered[:top_n] if means.get(t, 0) > 0]
+    rest    = [t for t in ordered[top_n:] if means.get(t, 0) > 0]
+
+    # Build display frame (USD)
+    plot_df = df[top].copy().fillna(0.0)
+    if rest:
+        plot_df["__other__"] = df[rest].fillna(0.0).sum(axis=1)
+
+    # Apply unit transform
+    if y_unit == "pct_agg":
+        denom = plot_df.sum(axis=1).replace(0, np.nan)
+        plot_df = plot_df.div(denom, axis=0) * 100.0
+        y_label = "SRISK (% of aggregate)"
+        hover_fmt = "%{y:.2f}%"
+        title_unit = "% of aggregate SRISK"
+    elif y_unit == "pct_mc" and total_mc_ts is not None:
+        denom = total_mc_ts.reindex(plot_df.index).ffill().replace(0, np.nan)
+        plot_df = plot_df.div(denom, axis=0) * 100.0
+        y_label = "SRISK (% of total market cap)"
+        hover_fmt = "%{y:.3f}%"
+        title_unit = "% of total market cap"
+    else:  # "bn"
+        plot_df = plot_df / 1e9
+        y_label = "SRISK (bn USD)"
+        hover_fmt = "%{y:.2f} bn"
+        title_unit = "USD bn"
+
+    fig = go.Figure()
+    # Add in reverse rank order so largest ends up at the bottom of the stack.
+    for col in reversed(plot_df.columns.tolist()):
+        if col == "__other__":
+            display_name = f"Other ({len(rest)})"
+            line_color   = "#b0b7c3"
+        else:
+            display_name = name_for(col)
+            line_color   = color_for(col)
+        fig.add_trace(go.Scatter(
+            x=plot_df.index, y=plot_df[col].values,
+            name=display_name,
+            mode="lines",
+            line=dict(width=0.5, color=line_color),
+            stackgroup="one",
+            fillcolor=line_color,
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {display_name}<br>"
+                f"Value: {hover_fmt}<extra></extra>"
+            ),
+        ))
+
+    if show_crises:
+        add_crisis_overlays(fig, data_start, data_end)
+
+    fig.update_layout(
+        title=dict(text=f"SRISK over Time — Stacked by Bank ({title_unit})",
+                   font=dict(size=14)),
+        yaxis_title=y_label,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1, font_size=10),
+        height=360,
         **base_layout(),
     )
     return fig
@@ -401,22 +523,201 @@ def corr_heatmap(returns: pd.DataFrame) -> go.Figure:
     if not cols:
         return go.Figure().update_layout(title="No data", **base_layout())
     corr  = returns[cols].corr()
+    n     = len(cols)
     names = [name_for(t) for t in corr.columns]
+
+    # Annotation text: show value for small matrices, hide for large ones to
+    # avoid overprinting.
+    show_text = n <= 12
+    text_fmt  = "%{text:.2f}" if show_text else ""
+
+    # Font size for cell annotations scales down as the matrix grows.
+    ann_fontsize = max(7, min(13, int(110 / max(n, 1))))
 
     fig = go.Figure(go.Heatmap(
         z=corr.values,
-        x=names, y=names,
+        x=names,
+        y=names,
         colorscale="RdBu_r",
         zmin=-1, zmax=1,
         text=np.round(corr.values, 2),
-        texttemplate="%{text}",
-        hovertemplate="%{x} / %{y}: %{z:.2f}<extra></extra>",
+        texttemplate=text_fmt,
+        textfont=dict(size=ann_fontsize),
+        hovertemplate="<b>%{x}</b> / <b>%{y}</b><br>Correlation: %{z:.3f}<extra></extra>",
+        colorbar=dict(
+            title=dict(text="ρ", side="right", font=dict(size=13)),
+            thickness=14,
+            len=0.85,
+            tickvals=[-1, -0.5, 0, 0.5, 1],
+            ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"],
+            tickfont=dict(size=11),
+            outlinewidth=0,
+        ),
     ))
+
+    # Axis tick font size: shrink for large matrices.
+    tick_fontsize = max(9, min(13, int(130 / max(n, 1))))
+
     fig.update_layout(
-        title=dict(text="Return Correlation Matrix", font=dict(size=14)),
-        height=420,
+        title=dict(text="Return Correlation Matrix", font=dict(size=14),
+                   x=0.5, xanchor="center"),
+        xaxis=dict(
+            tickangle=-40,
+            tickfont=dict(size=tick_fontsize),
+            side="bottom",
+            showgrid=False,
+        ),
+        yaxis=dict(
+            tickfont=dict(size=tick_fontsize),
+            autorange="reversed",
+            showgrid=False,
+        ),
+        height=820,
         **base_layout(),
     )
+    fig.update_layout(margin=dict(l=10, r=60, t=55, b=120))
+    return fig
+
+
+def market_dcc_chart(
+    prices: pd.DataFrame,
+    dcc_rho: pd.DataFrame,
+    show_crises: bool = False,
+    data_start=None,
+    data_end=None,
+) -> go.Figure:
+    """Three-row subplot: rebased prices | DCC ρ per bank | mean DCC ρ.
+    Shared x-axis and a single legend (rows 2-3 use legendgroup + showlegend=False)."""
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        row_heights=[0.38, 0.38, 0.24],
+        vertical_spacing=0.05,
+        subplot_titles=[
+            "Rebased Price (100 = period start)",
+            f"DCC ρ(t) — Correlation with {_D.MARKET_NAME}",
+            "Mean DCC ρ across selected banks",
+        ],
+    )
+
+    # Row 1: rebased prices — per-bank legend entries hidden
+    bank_tickers = [t for t in prices.columns if t in _D.ALL_BANKS]
+    for ticker in bank_tickers:
+        s = prices[ticker].dropna()
+        if len(s) < 2:
+            continue
+        rebased = s / s.iloc[0] * 100
+        fig.add_trace(go.Scatter(
+            x=rebased.index, y=rebased.values,
+            name=name_for(ticker),
+            legendgroup=ticker,
+            showlegend=False,
+            line=dict(color=color_for(ticker), width=1.5),
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {name_for(ticker)}<br>"
+                f"Value: %{{y:.2f}}<extra></extra>"
+            ),
+        ), row=1, col=1)
+    if _D.MARKET_NAME in prices.columns:
+        s = prices[_D.MARKET_NAME].dropna()
+        if len(s) >= 2:
+            rebased = s / s.iloc[0] * 100
+            # White halo below for contrast against the coloured bank lines.
+            fig.add_trace(go.Scatter(
+                x=rebased.index, y=rebased.values,
+                name=_D.MARKET_NAME,
+                legendgroup=_D.MARKET_NAME,
+                showlegend=False,
+                line=dict(color="#ffffff", width=7.0),
+                opacity=0.9,
+                hoverinfo="skip",
+            ), row=1, col=1)
+            # Prominent solid dark line on top.
+            fig.add_trace(go.Scatter(
+                x=rebased.index, y=rebased.values,
+                name=_D.MARKET_NAME,
+                legendgroup=_D.MARKET_NAME,
+                showlegend=True,
+                line=dict(color="#0d1b5e", width=3.2),
+                hovertemplate=(
+                    f"Date: %{{x|%Y-%m-%d}}<br>"
+                    f"<b>Bank: {_D.MARKET_NAME}</b><br>"
+                    f"Value: %{{y:.2f}}<extra></extra>"
+                ),
+            ), row=1, col=1)
+
+    # Row 2: DCC ρ per bank
+    for ticker in dcc_rho.columns:
+        s = dcc_rho[ticker].dropna()
+        if s.empty:
+            continue
+        fig.add_trace(go.Scatter(
+            x=s.index, y=s.values,
+            name=name_for(ticker),
+            legendgroup=ticker,
+            showlegend=False,
+            line=dict(color=color_for(ticker), width=1.5),
+            hovertemplate=(
+                f"Date: %{{x|%Y-%m-%d}}<br>"
+                f"Bank: {name_for(ticker)}<br>"
+                f"Value: %{{y:.3f}}<extra></extra>"
+            ),
+        ), row=2, col=1)
+
+    # Row 3: mean ρ
+    if not dcc_rho.empty:
+        avg = dcc_rho.mean(axis=1).dropna()
+        if not avg.empty:
+            fig.add_trace(go.Scatter(
+                x=avg.index, y=avg.values,
+                name="Mean ρ",
+                legendgroup="__mean_rho__",
+                showlegend=True,
+                line=dict(color="#0d47a1", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(13, 71, 161, 0.08)",
+                hovertemplate=(
+                    "Date: %{x|%Y-%m-%d}<br>"
+                    "Bank: Mean ρ<br>"
+                    "Value: %{y:.3f}<extra></extra>"
+                ),
+            ), row=3, col=1)
+            fig.add_hline(
+                y=float(avg.mean()), line_dash="dot", line_color="#555",
+                annotation_text="Sample mean", annotation_position="top left",
+                annotation_font_size=9, row=3, col=1,
+            )
+
+    # Crisis overlays — annotated labels only on row 1, plain shading on rows 2-3
+    if show_crises and data_start and data_end:
+        add_crisis_overlays(fig, data_start, data_end, row=1)
+        try:
+            ds, de = pd.to_datetime(data_start), pd.to_datetime(data_end)
+        except Exception:
+            ds = de = None
+        if ds is not None:
+            for cs_str, ce_str, _, color in CRISIS_PERIODS:
+                cs, ce = pd.to_datetime(cs_str), pd.to_datetime(ce_str)
+                if ce < ds or cs > de:
+                    continue
+                for r in [2, 3]:
+                    fig.add_vrect(
+                        x0=max(cs, ds), x1=min(ce, de),
+                        fillcolor=color, line_width=0, layer="below",
+                        row=r, col=1,
+                    )
+
+    fig.update_yaxes(title_text="Index", title_font_size=11, row=1, col=1)
+    fig.update_yaxes(title_text="ρ(t)", range=[-0.2, 1.0], title_font_size=11, row=2, col=1)
+    fig.update_yaxes(title_text="Mean ρ", range=[-0.2, 1.0], title_font_size=11, row=3, col=1)
+    fig.update_layout(
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="right", x=1, font_size=11),
+        height=820,
+        **base_layout(),
+    )
+    fig.update_layout(margin=dict(l=10, r=10, t=80, b=30))
     return fig
 
 
