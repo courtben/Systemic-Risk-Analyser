@@ -1,5 +1,6 @@
-# cached data (rebuilt automatically on first run)
-cache/
+# Cached DCC outputs / parquet snapshots are committed so cold-starts on
+# Render boot in seconds instead of timing out on the free tier (90 s).
+# The daily APScheduler job at 06:00 UTC keeps them fresh in-place.
 .claude/
 
 # Python

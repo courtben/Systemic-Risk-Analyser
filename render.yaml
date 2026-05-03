@@ -1,0 +1,24 @@
+# Render service definition for the Systemic Risk Dashboard.
+# Connects a GitHub repo to a managed web service running gunicorn.
+#
+# Single worker is intentional — the in-process APScheduler must run in
+# exactly one Python process to avoid concurrent daily refreshes.
+#
+# To use:
+#   1. Push this repo to GitHub (with cache/ committed for fast cold start).
+#   2. On Render: New > Blueprint > select this repo.
+#   3. Render reads this file and provisions the service automatically.
+services:
+  - type: web
+    name: systemic-risk-dashboard
+    runtime: python
+    plan: free
+    pythonVersion: "3.10"
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:server --workers=1 --threads=4 --timeout 120
+    autoDeploy: true
+    envVars:
+      - key: TZ
+        value: UTC
+      - key: PYTHONUNBUFFERED
+        value: "1"

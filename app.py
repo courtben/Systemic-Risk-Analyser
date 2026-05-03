@@ -30,6 +30,7 @@ import os
 from plotly.subplots import make_subplots
 
 import io
+import json
 import dash
 from dash import dcc, html, Input, Output, State, no_update, dash_table
 import dash_bootstrap_components as dbc
@@ -149,7 +150,41 @@ def _build_dcovar_grid() -> dict[float, pd.DataFrame]:
 print("\n[7/7] Precomputing ΔCoVaR α-grid (1%, 2.5%, 7.5%, 10%) ...")
 DCOVAR_BY_ALPHA = _build_dcovar_grid()
 
-LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+# ── Last-refresh persistence ─────────────────────────────────────────────────
+# Stored in cache/ so the timestamp survives container restarts and Render
+# deploys.  When the file is missing (very first boot, or after a fresh
+# clone without committed cache) we fall back to the current UTC time.
+
+_LAST_REFRESH_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cache", "last_refresh.json"
+)
+
+
+def _now_utc_str() -> str:
+    """Format the current UTC moment for display in the navbar."""
+    return pd.Timestamp.utcnow().tz_localize(None).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _read_last_refresh() -> str:
+    """Return the persisted last-refresh timestamp, or the current UTC time."""
+    try:
+        with open(_LAST_REFRESH_PATH, "r", encoding="utf-8") as f:
+            return json.load(f).get("timestamp_utc", _now_utc_str())
+    except Exception:
+        return _now_utc_str()
+
+
+def _write_last_refresh(ts: str) -> None:
+    """Persist the last-refresh timestamp so it survives restarts."""
+    try:
+        os.makedirs(os.path.dirname(_LAST_REFRESH_PATH), exist_ok=True)
+        with open(_LAST_REFRESH_PATH, "w", encoding="utf-8") as f:
+            json.dump({"timestamp_utc": ts}, f)
+    except Exception as exc:
+        print(f"[Refresh] could not persist last-refresh: {exc}")
+
+
+LAST_UPDATED = _read_last_refresh()
 print(f"\nReady  ({LAST_UPDATED})")
 print("=" * 60)
 
@@ -251,11 +286,19 @@ header = dbc.Navbar(
             ),
         ]),
         html.Div([
-            html.Small(f"Updated: {LAST_UPDATED}", id="updated-ts",
-                       className="text-muted me-3"),
-            html.Div(id="refresh-progress", className="me-2"),
-            dbc.Button("Refresh", id="btn-refresh", size="sm",
-                       color="primary", outline=True),
+            html.Div(id="refresh-progress", className="me-3"),
+            html.Div([
+                html.Span("Last refreshed",
+                          className="d-block text-muted",
+                          style={"fontSize": "0.66rem",
+                                 "letterSpacing": "0.08em",
+                                 "textTransform": "uppercase",
+                                 "lineHeight": "1"}),
+                html.Span(LAST_UPDATED, id="updated-ts",
+                          style={"fontSize": "0.85rem",
+                                 "fontWeight": "600",
+                                 "color": TEXT_MAIN}),
+            ], className="text-end"),
         ], className="d-flex align-items-center"),
     ], fluid=True, className="d-flex justify-content-between align-items-center"),
     color="white",
@@ -1133,9 +1176,12 @@ app.layout = html.Div([
     dcc.Store(id="refresh-store",      data=0),
     dcc.Store(id="alpha-store",        data=0.05),
     dcc.Store(id="custom-banks-store", data={}),
-    # Polls the background refresh worker; starts disabled, enabled by btn-refresh.
-    dcc.Interval(id="refresh-interval", interval=500,
-                 disabled=True, n_intervals=0),
+    # Polls the background refresh worker continuously.  Always enabled so
+    # the daily APScheduler-triggered refresh is picked up without any user
+    # interaction.  2 s feels live during an in-flight refresh while keeping
+    # idle traffic low.
+    dcc.Interval(id="refresh-interval", interval=2000,
+                 disabled=False, n_intervals=0),
     dcc.Loading(
         id="loading-main",
         custom_spinner=_loading_bar,
@@ -1513,7 +1559,8 @@ def _run_refresh_work(custom_banks: dict | None) -> None:
         DCOVAR_BY_ALPHA = _build_dcovar_grid()
 
         LEVERAGE = _build_leverage(LB_DAILY, MC_TS)
-        LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+        LAST_UPDATED = _now_utc_str()
+        _write_last_refresh(LAST_UPDATED)
 
         # Bump seq so the poll callback can fire refresh-store exactly once.
         with _REFRESH_LOCK:
@@ -1531,8 +1578,56 @@ def _run_refresh_work(custom_banks: dict | None) -> None:
         )
 
 
+# ── Daily refresh scheduler ──────────────────────────────────────────────────
+# Runs once per day at 06:00 UTC (~01:00 US/Eastern).  Replaces the manual
+# "Refresh" button.  APScheduler's BackgroundScheduler uses a worker thread
+# so it doesn't block Dash callbacks.
+#
+# Multi-process safety: APScheduler must not run in more than one process,
+# or daily jobs would fire concurrently.  Procfile pins `--workers=1`; the
+# DISABLE_SCHEDULER env var is an additional belt-and-braces guard for
+# local debugging or when running a separate worker container.
+
+_SCHEDULER_STARTED = False
+
+
+def _start_scheduler() -> None:
+    global _SCHEDULER_STARTED
+    if _SCHEDULER_STARTED or os.environ.get("DISABLE_SCHEDULER") == "1":
+        return
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        print("[Scheduler] APScheduler not installed — daily refresh disabled. "
+              "Add `APScheduler` to requirements.txt to enable.")
+        return
+
+    sched = BackgroundScheduler(timezone="UTC")
+    sched.add_job(
+        # Custom banks are session state; the daily cron refreshes the
+        # default universe only.  Users with custom banks can still trigger
+        # bank-specific recomputes via the Add-bank flow which calls into
+        # the same per-ticker pipeline.
+        func=lambda: _run_refresh_work({}),
+        trigger=CronTrigger(hour=6, minute=0, timezone="UTC"),
+        id="daily-refresh",
+        misfire_grace_time=3600,  # tolerate up-to-1h delay (e.g., dyno wake)
+        coalesce=True,            # collapse missed runs into one
+        max_instances=1,          # never overlap with an in-flight refresh
+    )
+    sched.start()
+    _SCHEDULER_STARTED = True
+    print("[Scheduler] Daily refresh scheduled at 06:00 UTC.")
+
+
+_start_scheduler()
+
+
 def _refresh_progress_view(state: dict):
-    """Render the small progress indicator shown next to the Refresh button."""
+    """Render the small progress indicator shown next to the navbar timestamp.
+    Visible only while the daily refresh job is in flight; idle and error
+    states render nothing or a one-line error message respectively."""
     if state.get("running"):
         pct = int(round(state.get("progress", 0.0) * 100))
         return html.Div([
@@ -1556,32 +1651,13 @@ def _refresh_progress_view(state: dict):
     return ""  # idle — nothing to show
 
 
-@app.callback(
-    Output("refresh-interval", "disabled"),
-    Output("refresh-progress", "children", allow_duplicate=True),
-    Input("btn-refresh",        "n_clicks"),
-    State("custom-banks-store", "data"),
-    prevent_initial_call=True,
-)
-def start_refresh(n_clicks, custom_banks):
-    """Start the background worker (if not already running) and enable polling."""
-    if not n_clicks:
-        return no_update, no_update
-    state = _get_refresh_state()
-    if state["running"]:
-        # Already refreshing — keep polling, but don't spawn a second thread.
-        return False, _refresh_progress_view(state)
-    threading.Thread(
-        target=_run_refresh_work,
-        args=(custom_banks,),
-        daemon=True,
-    ).start()
-    return False, _refresh_progress_view(_get_refresh_state())
+# Track which scheduler-completed refresh we've already broadcast to clients
+# so the always-on poll callback bumps refresh-store exactly once per refresh.
+_LAST_BROADCAST_SEQ = 0
 
 
 @app.callback(
     Output("refresh-progress", "children"),
-    Output("refresh-interval", "disabled", allow_duplicate=True),
     Output("refresh-store",    "data",     allow_duplicate=True),
     Output("updated-ts",       "children", allow_duplicate=True),
     Input("refresh-interval",  "n_intervals"),
@@ -1589,21 +1665,26 @@ def start_refresh(n_clicks, custom_banks):
     prevent_initial_call=True,
 )
 def poll_refresh(_n, current):
-    """Poll the refresh worker; when it finishes, bump refresh-store once."""
+    """Poll the refresh worker; while running, show progress.  When the
+    background scheduler completes a new refresh (state['seq'] advances),
+    bump refresh-store exactly once so every chart re-renders with fresh
+    data, and update the navbar timestamp."""
+    global _LAST_BROADCAST_SEQ
     state = _get_refresh_state()
     view  = _refresh_progress_view(state)
+    seq   = int(state.get("seq", 0))
+
     if state["running"]:
-        return view, False, no_update, no_update
-    # Worker is not running: either finished successfully, errored, or never
-    # started.  Disable the interval and, on success, bump refresh-store.
-    if state.get("error"):
-        return view, True, no_update, no_update
-    if state.get("completed_at"):
+        return view, no_update, no_update
+
+    # Idle: only emit when a NEW completed seq is present.
+    if seq > _LAST_BROADCAST_SEQ and state.get("completed_at"):
+        _LAST_BROADCAST_SEQ = seq
         new_counter = (current or 0) + 1
-        ts_text = f"Updated: {state['completed_at']}"
-        return view, True, new_counter, ts_text
-    # No refresh has ever run — stop polling quietly.
-    return view, True, no_update, no_update
+        return view, new_counter, state["completed_at"]
+
+    # No new refresh to broadcast — quiet.
+    return view, no_update, no_update
 
 
 # ── Alpha recompute ────────────────────────────────────────────────────────────
