@@ -641,6 +641,10 @@ srisk_layout = dbc.Container([
                 value=8,
                 marks={i: f"{i}%" for i in range(3, 16, 2)},
                 tooltip={"placement": "bottom", "always_visible": False},
+                # Only fire callback on mouse-release — without this, every
+                # intermediate drag position triggers a SRISK recompute
+                # (10+ callbacks per drag), making the UI feel frozen.
+                updatemode="mouseup",
                 className="mb-0",
             ),
             html.Small(
@@ -665,6 +669,9 @@ srisk_layout = dbc.Container([
                 value=40,
                 marks={i: f"{i}%" for i in range(10, 61, 10)},
                 tooltip={"placement": "bottom", "always_visible": False},
+                # Same rationale as srisk-k-slider: defer the callback
+                # until the user releases the mouse.
+                updatemode="mouseup",
                 className="mb-0",
             ),
             html.Small(
@@ -1696,29 +1703,68 @@ def poll_refresh(_n, current):
     prevent_initial_call=True,
 )
 def update_alpha(alpha):
-    """Recompute MES and swap in the precomputed ΔCoVaR for the selected
-    α ∈ {1, 2.5, 5, 7.5, 10}%. LRMES (and therefore SRISK) are α-invariant
-    under the Belluzzo/Brownlees–Engle closed form — their magnitude is set
-    by the fixed decline threshold d = 40% and the DCC components (ρ, σ_f,
-    σ_m). We still call recompute_for_alpha to refresh cached outputs, but
-    LRMES/SRISK values are unchanged by α."""
+    """Update MES + ΔCoVaR for a new α; everything else is α-invariant.
+
+    Performance-critical path. The previous implementation called
+    M.recompute_for_alpha which re-ran the IRLS quantile regression for
+    ΔCoVaR (only to be overwritten by the precomputed grid value), plus
+    the full LRMES / SES / SRISK pipeline (all α-invariant). On the free
+    Render tier this took 10–30 s per α click.
+
+    The optimised path:
+      1. ΔCoVaR — swap in the frame from DCOVAR_BY_ALPHA (precomputed at
+         startup for the full grid).
+      2. MES   — recompute from cached DCC outputs (ρ, σ_f, σ_m). This is
+         the only computation that genuinely depends on α: the kernel
+         weights k₁, k₂ are reweighted to the new tail probability.
+      3. LRMES, SES, SRISK — left untouched. They're α-invariant.
+    """
     global MEASURES
     alpha_pct = alpha * 100.0
-    print(f"\n[α] Recomputing MES & ΔCoVaR for α={alpha:.3f}")
-    new = M.recompute_for_alpha(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS, alpha=alpha)
-    # ΔCoVaR is precomputed on the exact α grid — pull the matching frame.
+    print(f"\n[α] Updating MES & ΔCoVaR for α={alpha:.3f}")
+
+    # 1) ΔCoVaR: O(1) frame swap from the precomputed grid.
     dcovar_df = DCOVAR_BY_ALPHA.get(round(alpha, 4))
-    if dcovar_df is not None:
-        new["delta_covar"] = dcovar_df
-    for key in new:
-        base = MEASURES.get(key)
-        if base is None or base.empty:
-            MEASURES[key] = new[key]
-            continue
-        updated = base.copy()
-        for col in new[key].columns:
-            updated[col] = new[key][col].reindex(updated.index)
-        MEASURES[key] = updated
+    if dcovar_df is not None and not dcovar_df.empty:
+        # Preserve the existing index so dependent slices align.
+        base = MEASURES.get("delta_covar")
+        if base is not None and not base.empty:
+            updated = base.copy()
+            for col in dcovar_df.columns:
+                updated[col] = dcovar_df[col].reindex(updated.index)
+            MEASURES["delta_covar"] = updated
+        else:
+            MEASURES["delta_covar"] = dcovar_df
+
+    # 2) MES: recompute per-bank from cached DCC components.
+    cached = M._load_dcc_cache()
+    if cached is not None:
+        dcc_sm, dcc_sf, dcc_rho = cached
+        mkt_ret = (RETURNS[MARKET_NAME] if MARKET_NAME in RETURNS.columns
+                   else RETURNS[RETURNS.columns.intersection(
+                       ["SMI", "S&P 500", "Market"])].iloc[:, 0])
+        bank_cols = [c for c in RETURNS.columns
+                     if c in MEASURES.get("mes", pd.DataFrame()).columns]
+        new_mes_frame = MEASURES["mes"].copy()
+        for ticker in bank_cols:
+            if ticker not in dcc_sm.columns:
+                continue
+            try:
+                bank_ret = RETURNS[ticker].dropna()
+                sm  = dcc_sm[ticker].dropna().values
+                sf  = dcc_sf[ticker].dropna().values
+                rho = dcc_rho[ticker].dropna().values
+                if len(sm) == 0 or len(sf) == 0 or len(rho) == 0:
+                    continue
+                mes_s, _ = M.compute_mes_lrmes(
+                    bank_ret, mkt_ret, sm, sf, rho, alpha=alpha
+                )
+                new_mes_frame[ticker] = mes_s.reindex(new_mes_frame.index)
+            except Exception as exc:
+                print(f"    [α] MES recompute failed for {ticker}: "
+                      f"{type(exc).__name__}: {exc}")
+        MEASURES["mes"] = new_mes_frame
+
     print("[α] Done.")
     return alpha, (
         f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days) — "
@@ -2153,9 +2199,12 @@ def _compute_srisk_df(k: float, d: float = _D_BASE) -> pd.DataFrame:
     Input("srisk-d-slider","value"),
     Input("srisk-ts-mode", "value"),
     Input("refresh-store", "data"),
-    Input("alpha-store",   "data"),
+    # Note: alpha-store is intentionally NOT an input here. SRISK and LRMES
+    # are α-invariant under the closed-form approximation (LRMES depends on
+    # ρ/σ/d only, not α). Wiring α to this callback would force an
+    # expensive 3-figure rebuild on every α click for no observable change.
 )
-def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh, _alpha):
+def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh):
     tickers = tickers or []
     # Convert slider values (percent) to ratios; recompute SRISK for this (k, d).
     k = float(k_pct) / 100.0 if k_pct is not None else 0.08
@@ -2255,9 +2304,12 @@ def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh, _al
     Input("bank-select",       "value"),
     Input("market-dcc-crises", "value"),
     Input("refresh-store",     "data"),
-    Input("alpha-store",       "data"),
+    # Note: alpha-store is intentionally NOT an input here. The market
+    # price index, DCC correlation matrix, and pairwise return correlation
+    # are all derived from raw returns / DCC outputs and do not depend on
+    # the tail probability α.
 )
-def update_market_dcc_tab(start, end, tickers, crises, _refresh, _alpha):
+def update_market_dcc_tab(start, end, tickers, crises, _refresh):
     tickers = tickers or []
     keep    = tickers + [MARKET_NAME]
     prices  = _slice(PRICES,  start, end, keep)
