@@ -30,6 +30,7 @@ import os
 from plotly.subplots import make_subplots
 
 import io
+import json
 import dash
 from dash import dcc, html, Input, Output, State, no_update, dash_table
 import dash_bootstrap_components as dbc
@@ -149,7 +150,41 @@ def _build_dcovar_grid() -> dict[float, pd.DataFrame]:
 print("\n[7/7] Precomputing ΔCoVaR α-grid (1%, 2.5%, 7.5%, 10%) ...")
 DCOVAR_BY_ALPHA = _build_dcovar_grid()
 
-LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+# ── Last-refresh persistence ─────────────────────────────────────────────────
+# Stored in cache/ so the timestamp survives container restarts and Render
+# deploys.  When the file is missing (very first boot, or after a fresh
+# clone without committed cache) we fall back to the current UTC time.
+
+_LAST_REFRESH_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "cache", "last_refresh.json"
+)
+
+
+def _now_utc_str() -> str:
+    """Format the current UTC moment for display in the navbar."""
+    return pd.Timestamp.utcnow().tz_localize(None).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _read_last_refresh() -> str:
+    """Return the persisted last-refresh timestamp, or the current UTC time."""
+    try:
+        with open(_LAST_REFRESH_PATH, "r", encoding="utf-8") as f:
+            return json.load(f).get("timestamp_utc", _now_utc_str())
+    except Exception:
+        return _now_utc_str()
+
+
+def _write_last_refresh(ts: str) -> None:
+    """Persist the last-refresh timestamp so it survives restarts."""
+    try:
+        os.makedirs(os.path.dirname(_LAST_REFRESH_PATH), exist_ok=True)
+        with open(_LAST_REFRESH_PATH, "w", encoding="utf-8") as f:
+            json.dump({"timestamp_utc": ts}, f)
+    except Exception as exc:
+        print(f"[Refresh] could not persist last-refresh: {exc}")
+
+
+LAST_UPDATED = _read_last_refresh()
 print(f"\nReady  ({LAST_UPDATED})")
 print("=" * 60)
 
@@ -251,11 +286,19 @@ header = dbc.Navbar(
             ),
         ]),
         html.Div([
-            html.Small(f"Updated: {LAST_UPDATED}", id="updated-ts",
-                       className="text-muted me-3"),
-            html.Div(id="refresh-progress", className="me-2"),
-            dbc.Button("Refresh", id="btn-refresh", size="sm",
-                       color="primary", outline=True),
+            html.Div(id="refresh-progress", className="me-3"),
+            html.Div([
+                html.Span("Last refreshed",
+                          className="d-block text-muted",
+                          style={"fontSize": "0.66rem",
+                                 "letterSpacing": "0.08em",
+                                 "textTransform": "uppercase",
+                                 "lineHeight": "1"}),
+                html.Span(LAST_UPDATED, id="updated-ts",
+                          style={"fontSize": "0.85rem",
+                                 "fontWeight": "600",
+                                 "color": TEXT_MAIN}),
+            ], className="text-end"),
         ], className="d-flex align-items-center"),
     ], fluid=True, className="d-flex justify-content-between align-items-center"),
     color="white",
@@ -598,6 +641,10 @@ srisk_layout = dbc.Container([
                 value=8,
                 marks={i: f"{i}%" for i in range(3, 16, 2)},
                 tooltip={"placement": "bottom", "always_visible": False},
+                # Only fire callback on mouse-release — without this, every
+                # intermediate drag position triggers a SRISK recompute
+                # (10+ callbacks per drag), making the UI feel frozen.
+                updatemode="mouseup",
                 className="mb-0",
             ),
             html.Small(
@@ -622,6 +669,9 @@ srisk_layout = dbc.Container([
                 value=40,
                 marks={i: f"{i}%" for i in range(10, 61, 10)},
                 tooltip={"placement": "bottom", "always_visible": False},
+                # Same rationale as srisk-k-slider: defer the callback
+                # until the user releases the mouse.
+                updatemode="mouseup",
                 className="mb-0",
             ),
             html.Small(
@@ -1133,9 +1183,12 @@ app.layout = html.Div([
     dcc.Store(id="refresh-store",      data=0),
     dcc.Store(id="alpha-store",        data=0.05),
     dcc.Store(id="custom-banks-store", data={}),
-    # Polls the background refresh worker; starts disabled, enabled by btn-refresh.
-    dcc.Interval(id="refresh-interval", interval=500,
-                 disabled=True, n_intervals=0),
+    # Polls the background refresh worker continuously.  Always enabled so
+    # the daily APScheduler-triggered refresh is picked up without any user
+    # interaction.  2 s feels live during an in-flight refresh while keeping
+    # idle traffic low.
+    dcc.Interval(id="refresh-interval", interval=2000,
+                 disabled=False, n_intervals=0),
     dcc.Loading(
         id="loading-main",
         custom_spinner=_loading_bar,
@@ -1513,7 +1566,8 @@ def _run_refresh_work(custom_banks: dict | None) -> None:
         DCOVAR_BY_ALPHA = _build_dcovar_grid()
 
         LEVERAGE = _build_leverage(LB_DAILY, MC_TS)
-        LAST_UPDATED = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+        LAST_UPDATED = _now_utc_str()
+        _write_last_refresh(LAST_UPDATED)
 
         # Bump seq so the poll callback can fire refresh-store exactly once.
         with _REFRESH_LOCK:
@@ -1531,8 +1585,56 @@ def _run_refresh_work(custom_banks: dict | None) -> None:
         )
 
 
+# ── Daily refresh scheduler ──────────────────────────────────────────────────
+# Runs once per day at 06:00 UTC (~01:00 US/Eastern).  Replaces the manual
+# "Refresh" button.  APScheduler's BackgroundScheduler uses a worker thread
+# so it doesn't block Dash callbacks.
+#
+# Multi-process safety: APScheduler must not run in more than one process,
+# or daily jobs would fire concurrently.  Procfile pins `--workers=1`; the
+# DISABLE_SCHEDULER env var is an additional belt-and-braces guard for
+# local debugging or when running a separate worker container.
+
+_SCHEDULER_STARTED = False
+
+
+def _start_scheduler() -> None:
+    global _SCHEDULER_STARTED
+    if _SCHEDULER_STARTED or os.environ.get("DISABLE_SCHEDULER") == "1":
+        return
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        print("[Scheduler] APScheduler not installed — daily refresh disabled. "
+              "Add `APScheduler` to requirements.txt to enable.")
+        return
+
+    sched = BackgroundScheduler(timezone="UTC")
+    sched.add_job(
+        # Custom banks are session state; the daily cron refreshes the
+        # default universe only.  Users with custom banks can still trigger
+        # bank-specific recomputes via the Add-bank flow which calls into
+        # the same per-ticker pipeline.
+        func=lambda: _run_refresh_work({}),
+        trigger=CronTrigger(hour=6, minute=0, timezone="UTC"),
+        id="daily-refresh",
+        misfire_grace_time=3600,  # tolerate up-to-1h delay (e.g., dyno wake)
+        coalesce=True,            # collapse missed runs into one
+        max_instances=1,          # never overlap with an in-flight refresh
+    )
+    sched.start()
+    _SCHEDULER_STARTED = True
+    print("[Scheduler] Daily refresh scheduled at 06:00 UTC.")
+
+
+_start_scheduler()
+
+
 def _refresh_progress_view(state: dict):
-    """Render the small progress indicator shown next to the Refresh button."""
+    """Render the small progress indicator shown next to the navbar timestamp.
+    Visible only while the daily refresh job is in flight; idle and error
+    states render nothing or a one-line error message respectively."""
     if state.get("running"):
         pct = int(round(state.get("progress", 0.0) * 100))
         return html.Div([
@@ -1556,32 +1658,13 @@ def _refresh_progress_view(state: dict):
     return ""  # idle — nothing to show
 
 
-@app.callback(
-    Output("refresh-interval", "disabled"),
-    Output("refresh-progress", "children", allow_duplicate=True),
-    Input("btn-refresh",        "n_clicks"),
-    State("custom-banks-store", "data"),
-    prevent_initial_call=True,
-)
-def start_refresh(n_clicks, custom_banks):
-    """Start the background worker (if not already running) and enable polling."""
-    if not n_clicks:
-        return no_update, no_update
-    state = _get_refresh_state()
-    if state["running"]:
-        # Already refreshing — keep polling, but don't spawn a second thread.
-        return False, _refresh_progress_view(state)
-    threading.Thread(
-        target=_run_refresh_work,
-        args=(custom_banks,),
-        daemon=True,
-    ).start()
-    return False, _refresh_progress_view(_get_refresh_state())
+# Track which scheduler-completed refresh we've already broadcast to clients
+# so the always-on poll callback bumps refresh-store exactly once per refresh.
+_LAST_BROADCAST_SEQ = 0
 
 
 @app.callback(
     Output("refresh-progress", "children"),
-    Output("refresh-interval", "disabled", allow_duplicate=True),
     Output("refresh-store",    "data",     allow_duplicate=True),
     Output("updated-ts",       "children", allow_duplicate=True),
     Input("refresh-interval",  "n_intervals"),
@@ -1589,21 +1672,26 @@ def start_refresh(n_clicks, custom_banks):
     prevent_initial_call=True,
 )
 def poll_refresh(_n, current):
-    """Poll the refresh worker; when it finishes, bump refresh-store once."""
+    """Poll the refresh worker; while running, show progress.  When the
+    background scheduler completes a new refresh (state['seq'] advances),
+    bump refresh-store exactly once so every chart re-renders with fresh
+    data, and update the navbar timestamp."""
+    global _LAST_BROADCAST_SEQ
     state = _get_refresh_state()
     view  = _refresh_progress_view(state)
+    seq   = int(state.get("seq", 0))
+
     if state["running"]:
-        return view, False, no_update, no_update
-    # Worker is not running: either finished successfully, errored, or never
-    # started.  Disable the interval and, on success, bump refresh-store.
-    if state.get("error"):
-        return view, True, no_update, no_update
-    if state.get("completed_at"):
+        return view, no_update, no_update
+
+    # Idle: only emit when a NEW completed seq is present.
+    if seq > _LAST_BROADCAST_SEQ and state.get("completed_at"):
+        _LAST_BROADCAST_SEQ = seq
         new_counter = (current or 0) + 1
-        ts_text = f"Updated: {state['completed_at']}"
-        return view, True, new_counter, ts_text
-    # No refresh has ever run — stop polling quietly.
-    return view, True, no_update, no_update
+        return view, new_counter, state["completed_at"]
+
+    # No new refresh to broadcast — quiet.
+    return view, no_update, no_update
 
 
 # ── Alpha recompute ────────────────────────────────────────────────────────────
@@ -1615,29 +1703,68 @@ def poll_refresh(_n, current):
     prevent_initial_call=True,
 )
 def update_alpha(alpha):
-    """Recompute MES and swap in the precomputed ΔCoVaR for the selected
-    α ∈ {1, 2.5, 5, 7.5, 10}%. LRMES (and therefore SRISK) are α-invariant
-    under the Belluzzo/Brownlees–Engle closed form — their magnitude is set
-    by the fixed decline threshold d = 40% and the DCC components (ρ, σ_f,
-    σ_m). We still call recompute_for_alpha to refresh cached outputs, but
-    LRMES/SRISK values are unchanged by α."""
+    """Update MES + ΔCoVaR for a new α; everything else is α-invariant.
+
+    Performance-critical path. The previous implementation called
+    M.recompute_for_alpha which re-ran the IRLS quantile regression for
+    ΔCoVaR (only to be overwritten by the precomputed grid value), plus
+    the full LRMES / SES / SRISK pipeline (all α-invariant). On the free
+    Render tier this took 10–30 s per α click.
+
+    The optimised path:
+      1. ΔCoVaR — swap in the frame from DCOVAR_BY_ALPHA (precomputed at
+         startup for the full grid).
+      2. MES   — recompute from cached DCC outputs (ρ, σ_f, σ_m). This is
+         the only computation that genuinely depends on α: the kernel
+         weights k₁, k₂ are reweighted to the new tail probability.
+      3. LRMES, SES, SRISK — left untouched. They're α-invariant.
+    """
     global MEASURES
     alpha_pct = alpha * 100.0
-    print(f"\n[α] Recomputing MES & ΔCoVaR for α={alpha:.3f}")
-    new = M.recompute_for_alpha(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS, alpha=alpha)
-    # ΔCoVaR is precomputed on the exact α grid — pull the matching frame.
+    print(f"\n[α] Updating MES & ΔCoVaR for α={alpha:.3f}")
+
+    # 1) ΔCoVaR: O(1) frame swap from the precomputed grid.
     dcovar_df = DCOVAR_BY_ALPHA.get(round(alpha, 4))
-    if dcovar_df is not None:
-        new["delta_covar"] = dcovar_df
-    for key in new:
-        base = MEASURES.get(key)
-        if base is None or base.empty:
-            MEASURES[key] = new[key]
-            continue
-        updated = base.copy()
-        for col in new[key].columns:
-            updated[col] = new[key][col].reindex(updated.index)
-        MEASURES[key] = updated
+    if dcovar_df is not None and not dcovar_df.empty:
+        # Preserve the existing index so dependent slices align.
+        base = MEASURES.get("delta_covar")
+        if base is not None and not base.empty:
+            updated = base.copy()
+            for col in dcovar_df.columns:
+                updated[col] = dcovar_df[col].reindex(updated.index)
+            MEASURES["delta_covar"] = updated
+        else:
+            MEASURES["delta_covar"] = dcovar_df
+
+    # 2) MES: recompute per-bank from cached DCC components.
+    cached = M._load_dcc_cache()
+    if cached is not None:
+        dcc_sm, dcc_sf, dcc_rho = cached
+        mkt_ret = (RETURNS[MARKET_NAME] if MARKET_NAME in RETURNS.columns
+                   else RETURNS[RETURNS.columns.intersection(
+                       ["SMI", "S&P 500", "Market"])].iloc[:, 0])
+        bank_cols = [c for c in RETURNS.columns
+                     if c in MEASURES.get("mes", pd.DataFrame()).columns]
+        new_mes_frame = MEASURES["mes"].copy()
+        for ticker in bank_cols:
+            if ticker not in dcc_sm.columns:
+                continue
+            try:
+                bank_ret = RETURNS[ticker].dropna()
+                sm  = dcc_sm[ticker].dropna().values
+                sf  = dcc_sf[ticker].dropna().values
+                rho = dcc_rho[ticker].dropna().values
+                if len(sm) == 0 or len(sf) == 0 or len(rho) == 0:
+                    continue
+                mes_s, _ = M.compute_mes_lrmes(
+                    bank_ret, mkt_ret, sm, sf, rho, alpha=alpha
+                )
+                new_mes_frame[ticker] = mes_s.reindex(new_mes_frame.index)
+            except Exception as exc:
+                print(f"    [α] MES recompute failed for {ticker}: "
+                      f"{type(exc).__name__}: {exc}")
+        MEASURES["mes"] = new_mes_frame
+
     print("[α] Done.")
     return alpha, (
         f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days) — "
@@ -1690,6 +1817,13 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     # ── 7-day delta for the aggregate KPI values ──────────────────────────────
     # Compares the latest cross-sectional aggregate (mean / sum) to the value
     # 7 calendar days earlier, so KPI cards reflect a recent trend.
+    #
+    # NOTE: We deliberately do NOT use DataFrame.asof here. DataFrame.asof
+    # walks backward until it finds a row with ALL columns non-NaN, which
+    # collapses to all-NaN whenever any single column is entirely empty
+    # (e.g. a freshly added bank without balance-sheet data yet). Series.asof
+    # (per-column) ignores NaN values column-wise and returns the most
+    # recent non-NaN observation ≤ prev_dt for each column independently.
     def _agg_7d_delta(df: pd.DataFrame, agg: str) -> float:
         if df is None or df.empty:
             return float("nan")
@@ -1699,18 +1833,16 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
         last_dt = d.index[-1]
         prev_dt = last_dt - pd.Timedelta(days=7)
         try:
-            prev_row = d.asof(prev_dt)
+            prev_row = d.apply(lambda s: s.asof(prev_dt))
         except Exception:
-            return float("nan")
-        if prev_row is None or (hasattr(prev_row, "empty") and prev_row.empty):
             return float("nan")
         cur = d.iloc[-1]
         if agg == "mean":
-            return float(cur.mean()) - float(prev_row.mean())
+            return float(cur.mean(skipna=True)) - float(prev_row.mean(skipna=True))
         if agg == "sum":
-            return float(cur.sum()) - float(prev_row.sum())
+            return float(cur.sum(skipna=True)) - float(prev_row.sum(skipna=True))
         if agg == "abs_mean":
-            return float(cur.abs().mean()) - float(prev_row.abs().mean())
+            return float(cur.abs().mean(skipna=True)) - float(prev_row.abs().mean(skipna=True))
         return float("nan")
 
     d_mes_kpi   = _agg_7d_delta(mes_df,    "mean")
@@ -1779,17 +1911,22 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     fig_covar = ranking_bar(_covar_top, "|ΔCoVaR| Ranking — Top 10 (latest)",   "|ΔCoVaR|")
 
     # ── Δ-last-week / Δ-last-month deltas ─────────────────────────────────────
-    # asof returns the last value on or before the given date.
+    # Per-column Series.asof is used instead of DataFrame.asof: the latter
+    # walks backward until it finds a row with all non-NaN columns, which
+    # collapses to NaN whenever any single bank's column is entirely empty
+    # (e.g. a freshly added bank without balance-sheet data yet). Per-column
+    # asof ignores NaN values column-wise and returns the most recent
+    # non-NaN observation ≤ prev_dt for each bank independently.
     def _delta(df: pd.DataFrame, days: int) -> pd.Series:
         if df.empty:
             return pd.Series(dtype=float)
         last = df.dropna(how="all")
         if last.empty:
             return pd.Series(dtype=float)
-        last_dt  = last.index[-1]
-        prev_dt  = last_dt - pd.Timedelta(days=days)
+        last_dt = last.index[-1]
+        prev_dt = last_dt - pd.Timedelta(days=days)
         try:
-            prev = last.asof(prev_dt)
+            prev = last.apply(lambda s: s.asof(prev_dt))
         except Exception:
             prev = pd.Series(np.nan, index=last.columns)
         return last.iloc[-1] - prev
@@ -2072,9 +2209,12 @@ def _compute_srisk_df(k: float, d: float = _D_BASE) -> pd.DataFrame:
     Input("srisk-d-slider","value"),
     Input("srisk-ts-mode", "value"),
     Input("refresh-store", "data"),
-    Input("alpha-store",   "data"),
+    # Note: alpha-store is intentionally NOT an input here. SRISK and LRMES
+    # are α-invariant under the closed-form approximation (LRMES depends on
+    # ρ/σ/d only, not α). Wiring α to this callback would force an
+    # expensive 3-figure rebuild on every α click for no observable change.
 )
-def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh, _alpha):
+def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh):
     tickers = tickers or []
     # Convert slider values (percent) to ratios; recompute SRISK for this (k, d).
     k = float(k_pct) / 100.0 if k_pct is not None else 0.08
@@ -2174,9 +2314,12 @@ def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh, _al
     Input("bank-select",       "value"),
     Input("market-dcc-crises", "value"),
     Input("refresh-store",     "data"),
-    Input("alpha-store",       "data"),
+    # Note: alpha-store is intentionally NOT an input here. The market
+    # price index, DCC correlation matrix, and pairwise return correlation
+    # are all derived from raw returns / DCC outputs and do not depend on
+    # the tail probability α.
 )
-def update_market_dcc_tab(start, end, tickers, crises, _refresh, _alpha):
+def update_market_dcc_tab(start, end, tickers, crises, _refresh):
     tickers = tickers or []
     keep    = tickers + [MARKET_NAME]
     prices  = _slice(PRICES,  start, end, keep)
