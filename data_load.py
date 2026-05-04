@@ -26,37 +26,66 @@ warnings.filterwarnings("ignore")
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# Universe: banks only (bank holding companies, custody banks, investment banks).
-# Explicitly excluded: insurers, pure asset managers, broker-dealers that are
-# not BHCs, alt-asset managers, payment processors.
+# Universe: top-~50 US bank / savings & loan holding companies by total
+# assets (S&P Global Market Intelligence Q4 2025 ranking).
+#
+# Includes the publicly listed BHCs/SLHCs whose stock reflects US bank
+# operations.  Explicitly excluded:
+#   • Foreign-parent ADRs (TD, HSBC, BMO, SAN, UBS, BCS, RY, DB, MFG, CM,
+#     BNP) whose listed stock reflects global group operations rather than
+#     US bank operations — including them would distort the US systemic-
+#     risk signal.
+#   • USAA — privately held, no public ticker.
 BANKS_BY_COUNTRY: dict[str, dict[str, str]] = {
     "US": {
         # Money-center / Big 4
-        "JPM":  "JPMorgan Chase",
-        "BAC":  "Bank of America",
-        "C":    "Citigroup",
-        "WFC":  "Wells Fargo",
+        "JPM":   "JPMorgan Chase",
+        "BAC":   "Bank of America",
+        "C":     "Citigroup",
+        "WFC":   "Wells Fargo",
         # Investment banks (BHCs since 2008)
-        "GS":   "Goldman Sachs",
-        "MS":   "Morgan Stanley",
+        "GS":    "Goldman Sachs",
+        "MS":    "Morgan Stanley",
         # Super-regional / national
-        "USB":  "U.S. Bancorp",
-        "PNC":  "PNC Financial",
-        "TFC":  "Truist Financial",
-        "COF":  "Capital One Financial",
+        "USB":   "U.S. Bancorp",
+        "PNC":   "PNC Financial",
+        "TFC":   "Truist Financial",
+        "COF":   "Capital One Financial",
         # Trust & custody banks
-        "BK":   "BNY Mellon",
-        "STT":  "State Street",
+        "BK":    "BNY Mellon",
+        "STT":   "State Street",
         "NTRS": "Northern Trust",
-        # Regional banks
-        "FITB": "Fifth Third Bancorp",
-        "KEY":  "KeyCorp",
-        "CFG":  "Citizens Financial",
-        "RF":   "Regions Financial",
-        "HBAN": "Huntington Bancshares",
-        "MTB":  "M&T Bank",
-        "CMA":  "Comerica",
-        "ZION": "Zions Bancorporation",
+        # Brokerage / wealth-management BHCs (SLHC charter)
+        "SCHW":  "Charles Schwab",
+        "AMP":   "Ameriprise Financial",
+        "RJF":   "Raymond James Financial",
+        # Consumer-finance / payments (BHC charter)
+        "AXP":   "American Express",
+        "ALLY":  "Ally Financial",
+        "SYF":   "Synchrony Financial",
+        # Large regionals
+        "FCNCA": "First Citizens BancShares",
+        "FITB":  "Fifth Third Bancorp",
+        "MTB":   "M&T Bank",
+        "KEY":   "KeyCorp",
+        "CFG":   "Citizens Financial",
+        "RF":    "Regions Financial",
+        "HBAN":  "Huntington Bancshares",
+        "WAL":   "Western Alliance",
+        # Mid-cap regionals
+        "WBS":   "Webster Financial",
+        "FHN":   "First Horizon",
+        "EWBC":  "East West Bancorp",
+        # Comerica (CMA) was acquired by Fifth Third and delisted from NYSE
+        # on 2026-02-02 — its assets now show up under FITB.
+        "BPOP":  "Popular Inc.",
+        "UMBF":  "UMB Financial",
+        "ONB":   "Old National Bancorp",
+        "WTFC":  "Wintrust Financial",
+        "SSB":   "SouthState",
+        "COLB":  "Columbia Banking System",
+        "VLY":   "Valley National Bancorp",
+        "ZION":  "Zions Bancorporation",
     },
 }
 
@@ -67,13 +96,18 @@ ALL_BANKS: dict[str, str] = {
     for ticker, name in banks.items()
 }
 
-# Auto-generate a distinct color per ticker from a diverse Material-style palette
+# Auto-generate a distinct color per ticker from a diverse Material-style
+# palette.  42 entries comfortably cover the ~39-bank universe with no
+# repeats; we keep a few extra so adding a couple of custom banks via the
+# UI doesn't immediately collide.
 _BANK_COLOR_PALETTE: list[str] = [
     "#0d47a1", "#c62828", "#37474f", "#f57f17", "#00838f", "#33691e",
     "#4a148c", "#bf360c", "#1a237e", "#b71c1c", "#1b5e20", "#e65100",
     "#311b92", "#263238", "#004d40", "#6a1b9a", "#827717", "#880e4f",
     "#01579b", "#3e2723", "#0d5302", "#4e342e", "#1e88e5", "#d81b60",
     "#43a047", "#fb8c00", "#5e35b1", "#00acc1", "#e53935", "#7cb342",
+    "#ad1457", "#558b2f", "#4527a0", "#00695c", "#283593", "#ef6c00",
+    "#2e7d32", "#9e9d24", "#0277bd", "#6d4c41", "#c2185b", "#455a64",
 ]
 
 BANK_COLORS: dict[str, str] = {
