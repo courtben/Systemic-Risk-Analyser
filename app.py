@@ -1817,6 +1817,13 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     # ── 7-day delta for the aggregate KPI values ──────────────────────────────
     # Compares the latest cross-sectional aggregate (mean / sum) to the value
     # 7 calendar days earlier, so KPI cards reflect a recent trend.
+    #
+    # NOTE: We deliberately do NOT use DataFrame.asof here. DataFrame.asof
+    # walks backward until it finds a row with ALL columns non-NaN, which
+    # collapses to all-NaN whenever any single column is entirely empty
+    # (e.g. a freshly added bank without balance-sheet data yet). Series.asof
+    # (per-column) ignores NaN values column-wise and returns the most
+    # recent non-NaN observation ≤ prev_dt for each column independently.
     def _agg_7d_delta(df: pd.DataFrame, agg: str) -> float:
         if df is None or df.empty:
             return float("nan")
@@ -1826,18 +1833,16 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
         last_dt = d.index[-1]
         prev_dt = last_dt - pd.Timedelta(days=7)
         try:
-            prev_row = d.asof(prev_dt)
+            prev_row = d.apply(lambda s: s.asof(prev_dt))
         except Exception:
-            return float("nan")
-        if prev_row is None or (hasattr(prev_row, "empty") and prev_row.empty):
             return float("nan")
         cur = d.iloc[-1]
         if agg == "mean":
-            return float(cur.mean()) - float(prev_row.mean())
+            return float(cur.mean(skipna=True)) - float(prev_row.mean(skipna=True))
         if agg == "sum":
-            return float(cur.sum()) - float(prev_row.sum())
+            return float(cur.sum(skipna=True)) - float(prev_row.sum(skipna=True))
         if agg == "abs_mean":
-            return float(cur.abs().mean()) - float(prev_row.abs().mean())
+            return float(cur.abs().mean(skipna=True)) - float(prev_row.abs().mean(skipna=True))
         return float("nan")
 
     d_mes_kpi   = _agg_7d_delta(mes_df,    "mean")
@@ -1906,17 +1911,22 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     fig_covar = ranking_bar(_covar_top, "|ΔCoVaR| Ranking — Top 10 (latest)",   "|ΔCoVaR|")
 
     # ── Δ-last-week / Δ-last-month deltas ─────────────────────────────────────
-    # asof returns the last value on or before the given date.
+    # Per-column Series.asof is used instead of DataFrame.asof: the latter
+    # walks backward until it finds a row with all non-NaN columns, which
+    # collapses to NaN whenever any single bank's column is entirely empty
+    # (e.g. a freshly added bank without balance-sheet data yet). Per-column
+    # asof ignores NaN values column-wise and returns the most recent
+    # non-NaN observation ≤ prev_dt for each bank independently.
     def _delta(df: pd.DataFrame, days: int) -> pd.Series:
         if df.empty:
             return pd.Series(dtype=float)
         last = df.dropna(how="all")
         if last.empty:
             return pd.Series(dtype=float)
-        last_dt  = last.index[-1]
-        prev_dt  = last_dt - pd.Timedelta(days=days)
+        last_dt = last.index[-1]
+        prev_dt = last_dt - pd.Timedelta(days=days)
         try:
-            prev = last.asof(prev_dt)
+            prev = last.apply(lambda s: s.asof(prev_dt))
         except Exception:
             prev = pd.Series(np.nan, index=last.columns)
         return last.iloc[-1] - prev
