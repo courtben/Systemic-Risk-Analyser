@@ -33,6 +33,35 @@ BORDER     = "#dee2e6"
 TEXT_MUTED = "#6c757d"
 TEXT_MAIN  = "#212529"
 
+# Unified palette — one tone per role across every tab. Inspired by a
+# modern admin-dashboard reference design.
+#
+#   ACCENT_BLUE       primary blue  — KPI accents, ranking bars, primary CTAs
+#   ACCENT_BLUE_DARK  deeper blue   — portfolio aggregate / overlay lines
+#   ACCENT_RED        single red    — worsening deltas, "High" risk, negative bars
+#   ACCENT_GREEN      single green  — improving deltas, "Low" risk, positive bars
+#   ACCENT_AMBER      single amber  — "Medium" risk pill
+#   NEUTRAL_GREY      muted grey    — "Other" slice, axis baselines
+ACCENT_BLUE      = "#4A8DDC"
+ACCENT_BLUE_DARK = "#5E6EED"
+ACCENT_RED       = "#FF0854"
+ACCENT_GREEN     = "#00D284"
+ACCENT_AMBER     = "#F59E0B"
+NEUTRAL_GREY     = "#b0b7c3"
+
+# Typography tokens — one size for every piece of in-chart text (axis titles,
+# tick labels, legend, annotations, in-bar value labels, pie labels) so the
+# dashboard reads as a single visual language. Chart titles stay slightly
+# larger so they remain visually distinct.
+#
+# Text colour: black-on-accent rather than white. Every brand colour in the
+# palette (#4A8DDC blue, #FF0854 red, #00D284 green, #F59E0B amber, plus the
+# vivid Tailwind 400-500 bank palette) is a mid-to-light tone where dark
+# text gives noticeably stronger WCAG contrast (5–10:1) than white (2–3.5:1).
+CHART_FONT_SIZE  = 12
+CHART_TITLE_SIZE = 14
+CHART_TEXT_COLOR = "#212529"
+
 # ── Crisis period overlays ────────────────────────────────────────────────────
 # Notable systemic-stress episodes; timings inspired by Acharya, Brunnermeier &
 # Pierret (2025) and common literature conventions.
@@ -68,7 +97,7 @@ def add_crisis_overlays(fig: go.Figure, data_start=None, data_end=None, row=None
             fillcolor=color, line_width=0, layer="below",
             annotation_text=label,
             annotation_position="top left",
-            annotation_font_size=9,
+            annotation_font_size=CHART_FONT_SIZE,
             annotation_font_color="#555",
         )
         if row is not None:
@@ -131,7 +160,7 @@ def base_layout(**kwargs) -> dict:
         template=PLOTLY_TEMPLATE,
         paper_bgcolor=BG_CARD,
         plot_bgcolor=BG_CARD,
-        font=dict(color=TEXT_MAIN, size=12),
+        font=dict(color=TEXT_MAIN, size=CHART_FONT_SIZE),
         margin=dict(l=10, r=10, t=45, b=30),
         **kwargs,
     )
@@ -148,7 +177,7 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
     s = s.reindex(s.abs().sort_values(ascending=False).index)
     labels = [f"{name_for(t)} ({t})" for t in s.index]
     xvals  = s.values / 1e9 if divide_bn else s.values
-    colors = ["#c62828" if v > 0 else "#2e7d32" for v in s.values]
+    colors = [ACCENT_RED if v > 0 else ACCENT_GREEN for v in s.values]
     if divide_bn:
         text = [f"{v/1e9:+,.2f} bn" for v in s.values]
     else:
@@ -160,6 +189,9 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
         marker_line_width=0,
         text=text, textposition="auto",
         insidetextanchor="middle",
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
@@ -167,9 +199,9 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
     left_margin = max(120, min(220, int(7.0 * longest)))
     base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
     )
@@ -180,7 +212,6 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
 def ranking_bar(series: pd.Series, title: str, xlabel: str,
                 fmt_fn=fmt_pct) -> go.Figure:
     s      = series.dropna().sort_values(ascending=False)
-    colors = [color_for(t) for t in s.index]
     # Compose "Bank Name (TICKER)" labels so users see both the readable
     # name and the symbol used for filtering / API calls.
     labels = [f"{name_for(t)} ({t})" for t in s.index]
@@ -191,10 +222,13 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
     fig = go.Figure(go.Bar(
         x=xvals, y=labels,
         orientation="h",
-        marker_color=colors,
+        marker_color=ACCENT_BLUE,
         marker_line_width=0,
         text=text, textposition="auto",
         insidetextanchor="middle",
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
@@ -204,9 +238,9 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
     left_margin = max(120, min(220, int(7.0 * longest)))
     base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
     )
@@ -269,7 +303,7 @@ def timeseries_chart(
         fig.add_trace(go.Scatter(
             x=agg_s.index, y=agg_s.values,
             name=aggregate_label,
-            line=dict(color="#0d1b5e", width=3.2),
+            line=dict(color=ACCENT_BLUE_DARK, width=3.2),
             showlegend=False,
             hovertemplate=(
                 f"Date: %{{x|%Y-%m-%d}}<br>"
@@ -279,7 +313,7 @@ def timeseries_chart(
         ), row=1, col=1)
 
     if market_ret is not None:
-        clrs = np.where(market_ret.values >= 0, "#2e7d32", "#c62828")
+        clrs = np.where(market_ret.values >= 0, ACCENT_GREEN, ACCENT_RED)
         fig.add_trace(go.Bar(
             x=market_ret.index, y=market_ret.values,
             name=_D.MARKET_NAME,
@@ -292,13 +326,13 @@ def timeseries_chart(
                 f"Value: %{{y:.4f}}<extra></extra>"
             ),
         ), row=2, col=1)
-        fig.update_yaxes(title_text="Mkt Return", row=2, col=1, title_font_size=11)
+        fig.update_yaxes(title_text="Mkt Return", row=2, col=1, title_font_size=CHART_FONT_SIZE)
 
     if show_crises:
         add_crisis_overlays(fig, data_start, data_end, row=1 if rows == 2 else None)
 
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         yaxis_title=ylabel,
         showlegend=False,
         height=480,
@@ -317,18 +351,21 @@ def srisk_bar_generic(series: pd.Series, title: str, xlabel: str,
     fig = go.Figure(go.Bar(
         x=s.values, y=labels,
         orientation="h",
-        marker_color=[color_for(t) for t in s.index],
+        marker_color=ACCENT_BLUE,
         marker_line_width=0,
         text=text, textposition="auto",
         insidetextanchor="middle",
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
     base["margin"] = dict(l=10, r=90, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
     )
@@ -344,19 +381,22 @@ def srisk_bar(series: pd.Series, title: str) -> go.Figure:
     fig = go.Figure(go.Bar(
         x=s.values / 1e9, y=labels,
         orientation="h",
-        marker_color=[color_for(t) for t in s.index],
+        marker_color=ACCENT_BLUE,
         marker_line_width=0,
         text=[fmt_bn(v) for v in s.values],
         textposition="auto",
         insidetextanchor="middle",
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="%{y}: %{text}<extra></extra>",
     ))
     base = base_layout()
     base["margin"] = dict(l=10, r=80, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14)),
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title="SRISK (bn, native currency)",
-        yaxis=dict(autorange="reversed"),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
     )
@@ -381,17 +421,20 @@ def srisk_pie(series: pd.Series, top_n: int = 5) -> go.Figure:
     if not other.empty:
         labels.append(f"Other ({len(other)})")
         values.append(float(other.sum()))
-        colors.append("#b0b7c3")
+        colors.append(NEUTRAL_GREY)
 
     fig = go.Figure(go.Pie(
         labels=labels, values=values,
         marker_colors=colors,
         textinfo="label+percent",
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
+        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="%{label}: %{value:.2e} (%{percent})<extra></extra>",
     ))
     fig.update_layout(
         title=dict(text=f"SRISK Share (%) — Top {top_n} + Other",
-                   font=dict(size=14)),
+                   font=dict(size=CHART_TITLE_SIZE)),
         height=320,
         **base_layout(),
     )
@@ -455,7 +498,7 @@ def srisk_stacked_area(
     for col in reversed(plot_df.columns.tolist()):
         if col == "__other__":
             display_name = f"Other ({len(rest)})"
-            line_color   = "#b0b7c3"
+            line_color   = NEUTRAL_GREY
         else:
             display_name = name_for(col)
             line_color   = color_for(col)
@@ -478,10 +521,10 @@ def srisk_stacked_area(
 
     fig.update_layout(
         title=dict(text=f"SRISK over Time — Stacked by Bank ({title_unit})",
-                   font=dict(size=14)),
+                   font=dict(size=CHART_TITLE_SIZE)),
         yaxis_title=y_label,
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=10),
+                    xanchor="right", x=1, font_size=CHART_FONT_SIZE),
         height=360,
         **base_layout(),
     )
@@ -516,10 +559,10 @@ def price_chart(prices: pd.DataFrame) -> go.Figure:
 
     fig.update_layout(
         title=dict(text="Rebased Price Performance (100 = start of period)",
-                   font=dict(size=14)),
+                   font=dict(size=CHART_TITLE_SIZE)),
         yaxis_title="Index (start = 100)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=11),
+                    xanchor="right", x=1, font_size=CHART_FONT_SIZE),
         height=380,
         **base_layout(),
     )
@@ -535,12 +578,10 @@ def corr_heatmap(returns: pd.DataFrame) -> go.Figure:
     names = [name_for(t) for t in corr.columns]
 
     # Annotation text: show value for small matrices, hide for large ones to
-    # avoid overprinting.
+    # avoid overprinting. When shown (n ≤ 12), the cells are large enough
+    # to host the standard chart font without overlap.
     show_text = n <= 12
     text_fmt  = "%{text:.2f}" if show_text else ""
-
-    # Font size for cell annotations scales down as the matrix grows.
-    ann_fontsize = max(7, min(13, int(110 / max(n, 1))))
 
     fig = go.Figure(go.Heatmap(
         z=corr.values,
@@ -550,33 +591,31 @@ def corr_heatmap(returns: pd.DataFrame) -> go.Figure:
         zmin=-1, zmax=1,
         text=np.round(corr.values, 2),
         texttemplate=text_fmt,
-        textfont=dict(size=ann_fontsize),
+        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
         hovertemplate="<b>%{x}</b> / <b>%{y}</b><br>Correlation: %{z:.3f}<extra></extra>",
         colorbar=dict(
-            title=dict(text="ρ", side="right", font=dict(size=13)),
+            title=dict(text="ρ", side="right", font=dict(size=CHART_FONT_SIZE)),
             thickness=14,
             len=0.85,
             tickvals=[-1, -0.5, 0, 0.5, 1],
             ticktext=["-1.0", "-0.5", "0", "+0.5", "+1.0"],
-            tickfont=dict(size=11),
+            tickfont=dict(size=CHART_FONT_SIZE),
             outlinewidth=0,
         ),
     ))
 
-    # Axis tick font size: shrink for large matrices.
-    tick_fontsize = max(9, min(13, int(130 / max(n, 1))))
-
     fig.update_layout(
-        title=dict(text="Return Correlation Matrix", font=dict(size=14),
+        title=dict(text="Return Correlation Matrix",
+                   font=dict(size=CHART_TITLE_SIZE),
                    x=0.5, xanchor="center"),
         xaxis=dict(
             tickangle=-40,
-            tickfont=dict(size=tick_fontsize),
+            tickfont=dict(size=CHART_FONT_SIZE),
             side="bottom",
             showgrid=False,
         ),
         yaxis=dict(
-            tickfont=dict(size=tick_fontsize),
+            tickfont=dict(size=CHART_FONT_SIZE),
             autorange="reversed",
             showgrid=False,
         ),
@@ -647,7 +686,7 @@ def market_dcc_chart(
                 name=_D.MARKET_NAME,
                 legendgroup=_D.MARKET_NAME,
                 showlegend=True,
-                line=dict(color="#0d1b5e", width=3.2),
+                line=dict(color=ACCENT_BLUE_DARK, width=3.2),
                 hovertemplate=(
                     f"Date: %{{x|%Y-%m-%d}}<br>"
                     f"<b>Bank: {_D.MARKET_NAME}</b><br>"
@@ -682,9 +721,9 @@ def market_dcc_chart(
                 name="Mean ρ",
                 legendgroup="__mean_rho__",
                 showlegend=True,
-                line=dict(color="#0d47a1", width=2),
+                line=dict(color=ACCENT_BLUE_DARK, width=2),
                 fill="tozeroy",
-                fillcolor="rgba(13, 71, 161, 0.08)",
+                fillcolor="rgba(94, 110, 237, 0.10)",
                 hovertemplate=(
                     "Date: %{x|%Y-%m-%d}<br>"
                     "Bank: Mean ρ<br>"
@@ -694,7 +733,7 @@ def market_dcc_chart(
             fig.add_hline(
                 y=float(avg.mean()), line_dash="dot", line_color="#555",
                 annotation_text="Sample mean", annotation_position="top left",
-                annotation_font_size=9, row=3, col=1,
+                annotation_font_size=CHART_FONT_SIZE, row=3, col=1,
             )
 
     # Crisis overlays — annotated labels only on row 1, plain shading on rows 2-3
@@ -716,12 +755,12 @@ def market_dcc_chart(
                         row=r, col=1,
                     )
 
-    fig.update_yaxes(title_text="Index", title_font_size=11, row=1, col=1)
-    fig.update_yaxes(title_text="ρ(t)", range=[-0.2, 1.0], title_font_size=11, row=2, col=1)
-    fig.update_yaxes(title_text="Mean ρ", range=[-0.2, 1.0], title_font_size=11, row=3, col=1)
+    fig.update_yaxes(title_text="Index", title_font_size=CHART_FONT_SIZE, row=1, col=1)
+    fig.update_yaxes(title_text="ρ(t)", range=[-0.2, 1.0], title_font_size=CHART_FONT_SIZE, row=2, col=1)
+    fig.update_yaxes(title_text="Mean ρ", range=[-0.2, 1.0], title_font_size=CHART_FONT_SIZE, row=3, col=1)
     fig.update_layout(
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=11),
+                    xanchor="right", x=1, font_size=CHART_FONT_SIZE),
         height=650,
         **base_layout(),
     )
@@ -740,11 +779,12 @@ def return_hist(returns: pd.DataFrame, tickers: list) -> go.Figure:
             marker_color=color_for(ticker),
         ))
     fig.update_layout(
-        title=dict(text="Daily Return Distribution (%)", font=dict(size=14)),
+        title=dict(text="Daily Return Distribution (%)",
+                   font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title="Daily Return (%)",
         barmode="overlay",
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
-                    xanchor="right", x=1, font_size=11),
+                    xanchor="right", x=1, font_size=CHART_FONT_SIZE),
         height=300,
         **base_layout(),
     )
@@ -755,49 +795,90 @@ def return_hist(returns: pd.DataFrame, tickers: list) -> go.Figure:
 
 def kpi_card(title: str, value: str, subtitle: str, accent: str,
              delta_text: str | None = None,
-             delta_direction: str = "neutral") -> dbc.Card:
+             delta_direction: str = "neutral",
+             risk_level: str | None = None,
+             risk_tooltip: str | None = None) -> dbc.Card:
     """KPI card with an optional 7-day delta badge.
 
     delta_direction ∈ {"up", "down", "neutral"} controls colour:
       up   → red    (worsening for risk measures)
       down → green  (improving)
       neutral → grey
+
+    risk_level ∈ {"Low", "Medium", "High", None} renders a coloured pill
+    inline next to the value, derived from the rolling-percentile classifier.
     """
-    badge_colour = {"up": "#c62828", "down": "#2e7d32",
+    badge_colour = {"up": ACCENT_RED, "down": ACCENT_GREEN,
                     "neutral": "#6c757d"}.get(delta_direction, "#6c757d")
     badge_arrow  = {"up": "▲ ", "down": "▼ ", "neutral": "◆ "}.get(
         delta_direction, "")
 
+    risk_colour = {"Low": ACCENT_GREEN, "Medium": ACCENT_AMBER,
+                   "High": ACCENT_RED}.get(risk_level or "", "#6c757d")
+
+    value_node = html.H4(value, style={"color": accent, "fontWeight": "700",
+                                       "marginBottom": "0",
+                                       "textAlign": "center"})
+    if risk_level:
+        risk_pill = html.Span(
+            risk_level,
+            title=risk_tooltip or "",
+            style={
+                "backgroundColor": risk_colour + "1a",
+                "color": risk_colour,
+                "border": f"1px solid {risk_colour}33",
+                "borderRadius": "999px",
+                "padding": "1px 8px",
+                "fontSize": "0.7rem",
+                "fontWeight": "700",
+                "letterSpacing": "0.04em",
+                "textTransform": "uppercase",
+                "alignSelf": "center",
+                "whiteSpace": "nowrap",
+            },
+        )
+        value_row = html.Div(
+            [value_node, risk_pill],
+            style={"display": "flex", "alignItems": "center",
+                   "justifyContent": "center",
+                   "flexWrap": "wrap", "gap": "6px",
+                   "marginBottom": "2px"},
+        )
+    else:
+        value_row = value_node
+
     body_children = [
-        html.P(title, className="mb-1 text-muted",
+        html.P(title, className="mb-1 text-muted text-center",
                style={"fontSize": "0.78rem", "fontWeight": "600",
                       "letterSpacing": "0.05em", "textTransform": "uppercase"}),
-        html.H4(value, style={"color": accent, "fontWeight": "700",
-                              "marginBottom": "2px"}),
+        value_row,
     ]
     if delta_text:
         body_children.append(
-            html.Span(
-                f"{badge_arrow}{delta_text}",
-                style={
-                    "display": "inline-block",
-                    "backgroundColor": badge_colour + "1a",  # ~10% alpha
-                    "color": badge_colour,
-                    "borderRadius": "4px",
-                    "padding": "1px 6px",
-                    "fontSize": "0.72rem",
-                    "fontWeight": "600",
-                    "marginBottom": "2px",
-                },
+            html.Div(
+                html.Span(
+                    f"{badge_arrow}{delta_text}",
+                    style={
+                        "display": "inline-block",
+                        "backgroundColor": badge_colour + "1a",  # ~10% alpha
+                        "color": badge_colour,
+                        "borderRadius": "4px",
+                        "padding": "1px 6px",
+                        "fontSize": "0.72rem",
+                        "fontWeight": "600",
+                    },
+                ),
+                style={"textAlign": "center", "marginBottom": "2px"},
             )
         )
     body_children.append(
-        html.P(subtitle, className="mb-0 text-muted",
+        html.P(subtitle, className="mb-0 text-muted text-center",
                style={"fontSize": "0.78rem"})
     )
 
     return dbc.Card([
-        dbc.CardBody(body_children)
+        dbc.CardBody(body_children, style={"textAlign": "center"})
     ], style={"backgroundColor": BG_CARD, "border": f"1px solid {BORDER}",
-              "borderLeft": f"4px solid {accent}",
-              "boxShadow": "0 1px 3px rgba(0,0,0,0.06)"})
+              "borderTop": f"4px solid {accent}",
+              "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+              "height": "100%"})
