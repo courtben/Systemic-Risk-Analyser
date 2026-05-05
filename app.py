@@ -208,6 +208,12 @@ BG_HEADER       = C.BG_HEADER
 BORDER          = C.BORDER
 TEXT_MUTED      = C.TEXT_MUTED
 TEXT_MAIN       = C.TEXT_MAIN
+ACCENT_BLUE      = C.ACCENT_BLUE
+ACCENT_BLUE_DARK = C.ACCENT_BLUE_DARK
+ACCENT_RED       = C.ACCENT_RED
+ACCENT_GREEN     = C.ACCENT_GREEN
+ACCENT_AMBER     = C.ACCENT_AMBER
+NEUTRAL_GREY     = C.NEUTRAL_GREY
 CRISIS_PERIODS  = C.CRISIS_PERIODS
 
 # Format / layout helpers — keep underscore-prefixed aliases for callbacks
@@ -378,7 +384,7 @@ controls = dbc.Container([
             ], size="sm"),
             dcc.Loading(
                 type="dot",
-                color="#0d47a1",
+                color=C.ACCENT_BLUE,
                 children=html.Div(id="add-bank-status",
                                   style={"fontSize": "0.7rem", "minHeight": "0"}),
             ),
@@ -434,11 +440,11 @@ _card = {"backgroundColor": BG_CARD,
 
 overview_layout = dbc.Container([
     dbc.Row([
-        dbc.Col(id="kpi-mes",      xs=6, md=4, lg=2, className="mb-3"),
-        dbc.Col(id="kpi-lrmes",    xs=6, md=4, lg=2, className="mb-3"),
-        dbc.Col(id="kpi-covar",    xs=6, md=4, lg=2, className="mb-3"),
-        dbc.Col(id="kpi-srisk",    xs=6, md=4, lg=2, className="mb-3"),
-        dbc.Col(id="kpi-leverage", xs=6, md=4, lg=2, className="mb-3"),
+        dbc.Col(id="kpi-mes",      xs=6, md=4, lg=True, className="mb-3"),
+        dbc.Col(id="kpi-lrmes",    xs=6, md=4, lg=True, className="mb-3"),
+        dbc.Col(id="kpi-covar",    xs=6, md=4, lg=True, className="mb-3"),
+        dbc.Col(id="kpi-srisk",    xs=6, md=4, lg=True, className="mb-3"),
+        dbc.Col(id="kpi-leverage", xs=6, md=4, lg=True, className="mb-3"),
     ], className="mt-3"),
     dbc.Row([
         dbc.Col([
@@ -1118,26 +1124,11 @@ methodology_layout = dbc.Container([
                         html.I("SRISK: A Conditional Capital Shortfall Measure of Systemic Risk. "),
                         "Review of Financial Studies 30(1): 48–79."]),
                     html.Li([
-                        "Engle, R. F. (2002). ",
-                        html.I("Dynamic Conditional Correlation. "),
-                        "Journal of Business & Economic Statistics 20(3): 339–350."]),
-                    html.Li([
-                        "Glosten, L. R., Jagannathan, R., & Runkle, D. E. (1993). ",
-                        html.I("On the Relation between the Expected Value and the "
-                               "Volatility of the Nominal Excess Return on Stocks. "),
-                        "Journal of Finance 48(5): 1779–1801."]),
-                    html.Li([
                         "Belluzzo, T. (2020). ",
                         html.A("github.com/TommasoBelluzzo/SystemicRisk",
                                href="https://github.com/TommasoBelluzzo/SystemicRisk",
                                target="_blank"),
                         " — MATLAB reference implementation."]),
-                    html.Li([
-                        "NYU Stern V-Lab — ",
-                        html.A("vlab.stern.nyu.edu/srisk",
-                               href="https://vlab.stern.nyu.edu/srisk",
-                               target="_blank"),
-                        " — published SRISK estimates for ~1 200 firms."]),
                 ], style={"fontSize": "0.85rem"}),
 
                 html.Hr(),
@@ -1872,31 +1863,103 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     srisk_badge, srisk_dir = _badge(d_srisk_kpi, "bn")
     lvg_badge,   lvg_dir   = _badge(d_lvg_kpi,   "ratio")
 
-    kpi_mes  = kpi_card("Avg. MES (latest)",
+    # ── Risk classification: rolling-500 percentile of the daily aggregate ───
+    # Build a per-day aggregate series across the (filtered) banks using the
+    # same aggregation as the KPI value, then compute the percentile rank of
+    # the latest aggregate within the last 500 observations:
+    #   < 0.7        → Low
+    #   0.7  – 0.9   → Medium
+    #   ≥ 0.9        → High
+    # Higher values mean more risk for every measure shown here, so the
+    # classification reads as severity directly.
+    def _classify_risk(
+        df: pd.DataFrame,
+        agg: str = "mean",
+        window: int = 500,
+        min_obs: int = 30,
+        fmt_fn=None,
+        abs_for_value: bool = False,
+    ) -> tuple[str | None, str | None]:
+        if df is None or df.empty:
+            return None, None
+        d = df.dropna(how="all")
+        if d.empty:
+            return None, None
+        if agg == "mean":
+            s = d.mean(axis=1, skipna=True)
+        elif agg == "sum":
+            s = d.sum(axis=1, skipna=True, min_count=1)
+        elif agg == "abs_mean":
+            s = d.abs().mean(axis=1, skipna=True)
+        else:
+            return None, None
+        s = s.dropna()
+        if len(s) < min_obs:
+            return None, None
+        win = s.tail(window)
+        latest = float(win.iloc[-1])
+        pct = float((win <= latest).sum()) / float(len(win))
+        if pct >= 0.9:
+            level = "High"
+        elif pct >= 0.7:
+            level = "Medium"
+        else:
+            level = "Low"
+        q70 = float(win.quantile(0.70))
+        q90 = float(win.quantile(0.90))
+        # |ΔCoVaR| is displayed as the absolute value, so format the tooltip
+        # threshold values with the same sign convention.
+        if abs_for_value:
+            latest = abs(latest)
+            q70    = abs(q70)
+            q90    = abs(q90)
+        f = fmt_fn or (lambda x: f"{x:,.4f}")
+        tip = (
+            f"Rolling {len(win)}-obs percentile: {pct * 100:.0f}%\n"
+            f"Current: {f(latest)}\n"
+            f"P70 (Medium ≥): {f(q70)}\n"
+            f"P90 (High ≥): {f(q90)}\n"
+            f"Bands: Low <70%  ·  Medium 70–90%  ·  High ≥90%"
+        )
+        return level, tip
+
+    mes_risk,   mes_tip   = _classify_risk(mes_df,    "mean",     fmt_fn=_fmt_pct)
+    lrmes_risk, lrmes_tip = _classify_risk(lrmes_df,  "mean",     fmt_fn=_fmt_pct)
+    cov_risk,   cov_tip   = _classify_risk(dcovar_df, "abs_mean", fmt_fn=_fmt_pct, abs_for_value=True)
+    srisk_risk, srisk_tip = _classify_risk(srisk_df,  "sum",      fmt_fn=_fmt_bn)
+    lvg_risk,   lvg_tip   = _classify_risk(lvg_df,    "mean",     fmt_fn=_fmt_ratio)
+
+    _ACCENT = ACCENT_BLUE
+    kpi_mes  = kpi_card("Avg. MES",
                         _fmt_pct(agg_mes),
                         "Mean 1-day tail loss",
-                        "#c62828",
-                        delta_text=mes_badge, delta_direction=mes_dir)
-    kpi_lrmes = kpi_card("Avg. LRMES (latest)",
+                        _ACCENT,
+                        delta_text=mes_badge, delta_direction=mes_dir,
+                        risk_level=mes_risk, risk_tooltip=mes_tip)
+    kpi_lrmes = kpi_card("Avg. LRMES",
                         _fmt_pct(agg_lrmes),
                         "Long-run MES at d-decline scenario",
-                        "#ad1457",
-                        delta_text=lrmes_badge, delta_direction=lrmes_dir)
-    kpi_cov  = kpi_card("Avg. |ΔCoVaR| (latest)",
+                        _ACCENT,
+                        delta_text=lrmes_badge, delta_direction=lrmes_dir,
+                        risk_level=lrmes_risk, risk_tooltip=lrmes_tip)
+    kpi_cov  = kpi_card("Avg. |ΔCoVaR|",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                         "Mean marginal systemic contribution",
-                        "#e65100",
-                        delta_text=cov_badge, delta_direction=cov_dir)
-    kpi_srisk = kpi_card("Total SRISK (latest)",
+                        _ACCENT,
+                        delta_text=cov_badge, delta_direction=cov_dir,
+                        risk_level=cov_risk, risk_tooltip=cov_tip)
+    kpi_srisk = kpi_card("Total SRISK",
                          _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
                          "Aggregate capital shortfall estimate",
-                         "#2e7d32",
-                         delta_text=srisk_badge, delta_direction=srisk_dir)
-    kpi_lvg  = kpi_card("Avg. Leverage (LVG)",
+                         _ACCENT,
+                         delta_text=srisk_badge, delta_direction=srisk_dir,
+                         risk_level=srisk_risk, risk_tooltip=srisk_tip)
+    kpi_lvg  = kpi_card("Avg. Leverage",
                         _fmt_ratio(agg_lvg),
                         "(Liabilities + Market Cap) / Market Cap",
-                        "#0277bd",
-                        delta_text=lvg_badge, delta_direction=lvg_dir)
+                        _ACCENT,
+                        delta_text=lvg_badge, delta_direction=lvg_dir,
+                        risk_level=lvg_risk, risk_tooltip=lvg_tip)
 
     # Overview ranking bars — show only the top 10 banks per measure
     _TOP_N = 10
@@ -2027,16 +2090,16 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
         },
         style_data_conditional=[
             # Positive deltas (worsening for MES/ΔCoVaR/SRISK) in red
-            {"if": {"filter_query": "{mes_dw} > 0",   "column_id": "mes_dw"},   "color": "#c62828"},
-            {"if": {"filter_query": "{mes_dw} < 0",   "column_id": "mes_dw"},   "color": "#2e7d32"},
-            {"if": {"filter_query": "{mes_dm} > 0",   "column_id": "mes_dm"},   "color": "#c62828"},
-            {"if": {"filter_query": "{mes_dm} < 0",   "column_id": "mes_dm"},   "color": "#2e7d32"},
-            {"if": {"filter_query": "{covar_dw} > 0", "column_id": "covar_dw"}, "color": "#c62828"},
-            {"if": {"filter_query": "{covar_dw} < 0", "column_id": "covar_dw"}, "color": "#2e7d32"},
-            {"if": {"filter_query": "{srisk_dw} > 0", "column_id": "srisk_dw"}, "color": "#c62828"},
-            {"if": {"filter_query": "{srisk_dw} < 0", "column_id": "srisk_dw"}, "color": "#2e7d32"},
-            {"if": {"filter_query": "{srisk_dm} > 0", "column_id": "srisk_dm"}, "color": "#c62828"},
-            {"if": {"filter_query": "{srisk_dm} < 0", "column_id": "srisk_dm"}, "color": "#2e7d32"},
+            {"if": {"filter_query": "{mes_dw} > 0",   "column_id": "mes_dw"},   "color": C.ACCENT_RED},
+            {"if": {"filter_query": "{mes_dw} < 0",   "column_id": "mes_dw"},   "color": C.ACCENT_GREEN},
+            {"if": {"filter_query": "{mes_dm} > 0",   "column_id": "mes_dm"},   "color": C.ACCENT_RED},
+            {"if": {"filter_query": "{mes_dm} < 0",   "column_id": "mes_dm"},   "color": C.ACCENT_GREEN},
+            {"if": {"filter_query": "{covar_dw} > 0", "column_id": "covar_dw"}, "color": C.ACCENT_RED},
+            {"if": {"filter_query": "{covar_dw} < 0", "column_id": "covar_dw"}, "color": C.ACCENT_GREEN},
+            {"if": {"filter_query": "{srisk_dw} > 0", "column_id": "srisk_dw"}, "color": C.ACCENT_RED},
+            {"if": {"filter_query": "{srisk_dw} < 0", "column_id": "srisk_dw"}, "color": C.ACCENT_GREEN},
+            {"if": {"filter_query": "{srisk_dm} > 0", "column_id": "srisk_dm"}, "color": C.ACCENT_RED},
+            {"if": {"filter_query": "{srisk_dm} < 0", "column_id": "srisk_dm"}, "color": C.ACCENT_GREEN},
         ],
         style_table={"overflowX": "auto", "backgroundColor": BG_CARD},
     )
@@ -2279,8 +2342,8 @@ def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh):
         fig_ts = go.Figure(go.Scatter(
             x=agg.index, y=y_ts,
             fill="tozeroy",
-            fillcolor="rgba(198,40,40,0.12)",
-            line=dict(color="#c62828", width=2),
+            fillcolor="rgba(74, 141, 220, 0.12)",
+            line=dict(color=C.ACCENT_BLUE, width=2),
             name="Aggregate",
             hovertemplate=(
                 f"Date: %{{x|%Y-%m-%d}}<br>"
@@ -2291,7 +2354,7 @@ def update_srisk(start, end, tickers, norm, k_pct, d_pct, ts_mode, _refresh):
         _add_crisis_overlays(fig_ts, start, end)
         fig_ts.update_layout(
             title=dict(text="Aggregate SRISK over Time",
-                       font=dict(size=14)),
+                       font=dict(size=C.CHART_TITLE_SIZE)),
             yaxis_title=y_label,
             height=360,
             **_base_layout(),

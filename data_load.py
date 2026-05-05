@@ -96,18 +96,25 @@ ALL_BANKS: dict[str, str] = {
     for ticker, name in banks.items()
 }
 
-# Auto-generate a distinct color per ticker from a diverse Material-style
-# palette.  42 entries comfortably cover the ~39-bank universe with no
-# repeats; we keep a few extra so adding a couple of custom banks via the
-# UI doesn't immediately collide.
+# Distinct colour per ticker, drawn from a modern Tailwind-inspired palette
+# (500-tone primary cycle, then 700-tone darker cycle, then 400-tone lighter
+# cycle). 42 entries comfortably cover the ~39-bank universe with no
+# adjacent repeats and stay readable against a white canvas.
 _BANK_COLOR_PALETTE: list[str] = [
-    "#0d47a1", "#c62828", "#37474f", "#f57f17", "#00838f", "#33691e",
-    "#4a148c", "#bf360c", "#1a237e", "#b71c1c", "#1b5e20", "#e65100",
-    "#311b92", "#263238", "#004d40", "#6a1b9a", "#827717", "#880e4f",
-    "#01579b", "#3e2723", "#0d5302", "#4e342e", "#1e88e5", "#d81b60",
-    "#43a047", "#fb8c00", "#5e35b1", "#00acc1", "#e53935", "#7cb342",
-    "#ad1457", "#558b2f", "#4527a0", "#00695c", "#283593", "#ef6c00",
-    "#2e7d32", "#9e9d24", "#0277bd", "#6d4c41", "#c2185b", "#455a64",
+    # Cycle 1 — vivid mid-tones (Tailwind 500)
+    "#EF4444", "#22C55E", "#F59E0B", "#8B5CF6",
+    "#EC4899", "#14B8A6", "#F97316", "#06B6D4",
+    "#A855F7", "#84CC16", "#D946EF", "#6366F1",
+    "#0EA5E9", "#EAB308", "#10B981", "#3B82F6",
+    # Cycle 2 — deeper tones (Tailwind 700)
+    "#B91C1C", "#15803D", "#B45309", "#6D28D9",
+    "#BE185D", "#0F766E", "#C2410C", "#0E7490",
+    "#7E22CE", "#4D7C0F", "#A21CAF", "#4338CA",
+    "#0369A1", "#A16207", "#047857", "#1D4ED8",
+    # Cycle 3 — softer tones (Tailwind 400)
+    "#F87171", "#34D399", "#FBBF24", "#A78BFA",
+    "#F472B6", "#2DD4BF", "#FB923C", "#22D3EE",
+    "#C084FC", "#60A5FA",
 ]
 
 BANK_COLORS: dict[str, str] = {

@@ -1,0 +1,47 @@
+/* Tab title colour — match the dashboard accent (ACCENT_BLUE = #4A8DDC).
+   Applies to both active and inactive labels, plus the active-tab underline. */
+.nav-tabs .nav-link {
+    color: #4A8DDC;
+    font-weight: 600;
+}
+
+.nav-tabs .nav-link:hover,
+.nav-tabs .nav-link:focus {
+    color: #4A8DDC;
+    border-bottom-color: #4A8DDC;
+}
+
+.nav-tabs .nav-link.active,
+.nav-tabs .nav-link.active:hover,
+.nav-tabs .nav-link.active:focus {
+    color: #4A8DDC !important;
+    border-bottom-color: #4A8DDC !important;
+}
+
+/* dcc.Slider — match the dashboard accent for the SRISK k / d sliders. */
+.rc-slider-track {
+    background-color: #4A8DDC !important;
+}
+.rc-slider-handle {
+    border-color: #4A8DDC !important;
+    background-color: #4A8DDC !important;
+    opacity: 1 !important;
+}
+.rc-slider-handle:hover,
+.rc-slider-handle:active,
+.rc-slider-handle:focus,
+.rc-slider-handle-dragging.rc-slider-handle-dragging.rc-slider-handle-dragging {
+    border-color: #4A8DDC !important;
+    box-shadow: 0 0 0 5px rgba(74, 141, 220, 0.25) !important;
+}
+.rc-slider-dot-active {
+    border-color: #4A8DDC !important;
+}
+.rc-slider-tooltip-inner {
+    background-color: #4A8DDC !important;
+    border-color: #4A8DDC !important;
+}
+.rc-slider-tooltip-arrow {
+    border-top-color: #4A8DDC !important;
+    border-bottom-color: #4A8DDC !important;
+}
