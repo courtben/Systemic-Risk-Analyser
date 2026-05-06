@@ -27,12 +27,11 @@ except Exception:
 import pandas as pd
 import plotly.graph_objects as go
 import os
-from plotly.subplots import make_subplots
 
 import io
 import json
 import dash
-from dash import dcc, html, Input, Output, State, no_update, dash_table
+from dash import dcc, html, Input, Output, State, no_update, dash_table, ALL
 import dash_bootstrap_components as dbc
 
 warnings.filterwarnings("ignore")
@@ -224,7 +223,6 @@ _color               = C.color_for
 _fmt_bn              = C.fmt_bn
 _fmt_pct             = C.fmt_pct
 _fmt_ratio           = C.fmt_ratio
-_fmt_ses             = C.fmt_ses
 _fmt_pct_raw         = C.fmt_pct_raw
 _fmt_bn_x1           = C.fmt_bn_x1
 
@@ -233,7 +231,6 @@ delta_ranking_bar    = C.delta_ranking_bar
 ranking_bar          = C.ranking_bar
 timeseries_chart     = C.timeseries_chart
 _srisk_bar_generic   = C.srisk_bar_generic
-srisk_bar            = C.srisk_bar
 srisk_pie            = C.srisk_pie
 srisk_stacked_area   = C.srisk_stacked_area
 price_chart          = C.price_chart
@@ -437,6 +434,266 @@ _card = {"backgroundColor": BG_CARD,
          "borderRadius": "6px",
          "padding": "12px 16px",
          "marginBottom": "16px"}
+
+# ── Start tab ────────────────────────────────────────────────────────────────
+# Landing page: brief orientation, the three core measures with live KPIs,
+# tab navigation cards, and quick reference material (risk pills, crisis
+# bands, data scope). Built once at import time; the three KPI cards are
+# populated by the existing Overview callback so values match the rest of
+# the dashboard exactly.
+
+_TABS_META: list[tuple[str, str, str, str]] = [
+    # (tab_id, label, one-line description, FontAwesome-like glyph emoji)
+    ("tab-overview",
+     "Overview",
+     "Latest aggregated risk measures, top-bank rankings, and 7-day shifts.",
+     "📊"),
+    ("tab-ts",
+     "Time Series",
+     "Per-bank time series for MES, LRMES, ΔCoVaR, SRISK with crisis bands.",
+     "📈"),
+    ("tab-srisk",
+     "SRISK",
+     "Capital-shortfall scenario tool: tune k and d, drill into per-bank SRISK.",
+     "💰"),
+    ("tab-market",
+     "Market & Correlation",
+     "Rebased prices, return distributions, and DCC correlation dynamics.",
+     "🔗"),
+    ("tab-methodology",
+     "Methodology",
+     "Definitions, formulas, parameter choices, and academic references.",
+     "📚"),
+]
+
+
+def _measure_explainer(title: str, body: str) -> html.Div:
+    return html.Div([
+        html.H6(title, className="mb-1 mt-1",
+                style={"fontWeight": "700", "color": TEXT_MAIN,
+                       "fontSize": "0.92rem"}),
+        html.P(body, className="text-muted mb-0",
+               style={"fontSize": "0.78rem", "lineHeight": "1.35"}),
+    ])
+
+
+def _tab_link_row(tab_id: str, label: str, desc: str, glyph: str) -> html.Div:
+    """Single full-width clickable row for the vertical tab-bookmark list."""
+    inner = dbc.Card(
+        dbc.CardBody([
+            html.Div([
+                html.Span(glyph, style={"fontSize": "1.1rem",
+                                        "marginRight": "8px"}),
+                html.Div([
+                    html.Div(label, style={"fontWeight": "700",
+                                           "fontSize": "0.88rem",
+                                           "color": TEXT_MAIN,
+                                           "lineHeight": "1.2"}),
+                    html.Div(desc, className="text-muted",
+                             style={"fontSize": "0.72rem",
+                                    "lineHeight": "1.3"}),
+                ], style={"flex": "1", "minWidth": 0}),
+                html.Span("→",
+                          style={"color": ACCENT_BLUE,
+                                 "fontWeight": "700",
+                                 "fontSize": "1.05rem",
+                                 "marginLeft": "8px"}),
+            ], className="d-flex align-items-center"),
+        ], style={"padding": "8px 12px"}),
+        style={"border": f"1px solid {BORDER}",
+               "borderLeft": f"4px solid {ACCENT_BLUE}",
+               "boxShadow": "0 1px 3px rgba(0,0,0,0.05)"},
+    )
+    return html.Div(
+        inner,
+        id={"type": "start-tab-link", "tab": tab_id},
+        n_clicks=0,
+        className="start-tab-link mb-2",
+        style={"cursor": "pointer",
+               "transition": "transform 0.12s, box-shadow 0.12s"},
+    )
+
+
+_RISK_LEGEND_ITEMS = [
+    ("Low",    ACCENT_GREEN, "Latest aggregate is below the 70th percentile of the last 500 observations."),
+    ("Medium", ACCENT_AMBER, "Latest aggregate sits between the 70th and 90th percentiles — elevated but not extreme."),
+    ("High",   ACCENT_RED,   "Latest aggregate is at or above the 90th percentile — historically stressful regime."),
+]
+
+
+def _risk_pill(label: str, color: str) -> html.Span:
+    return html.Span(
+        label,
+        style={
+            "backgroundColor": color + "1a",
+            "color": color,
+            "border": f"1px solid {color}33",
+            "borderRadius": "999px",
+            "padding": "1px 10px",
+            "fontSize": "0.72rem",
+            "fontWeight": "700",
+            "letterSpacing": "0.04em",
+            "textTransform": "uppercase",
+            "whiteSpace": "nowrap",
+            "marginRight": "10px",
+        },
+    )
+
+
+_HOW_TO_USE = [
+    ("Filter the universe",
+     "Use the bank, country, and date-range pickers in the top bar to scope every chart and KPI."),
+    ("Hover for detail",
+     "Every chart point and risk pill carries a tooltip with the underlying numbers and percentile context."),
+    ("Tune SRISK assumptions",
+     "On the SRISK tab, the k (capital ratio) and d (market-decline) sliders let you stress-test scenarios live."),
+    ("Pick a snapshot date",
+     "Inside the Overview tab, the snapshot picker recomputes the risk-summary table at any historical day in range."),
+]
+
+
+_compact_card = {**_card, "padding": "10px 14px", "marginBottom": "10px"}
+
+
+start_layout = dbc.Container([
+    # ── Top row: summary (left) + tab bookmarks stacked (right) ──────────
+    dbc.Row([
+        # Left — dashboard summary (centered content)
+        dbc.Col(
+            html.Div([
+                html.H3("Systemic Risk Analyser",
+                        className="text-center",
+                        style={"fontWeight": "800",
+                               "color": TEXT_MAIN,
+                               "marginBottom": "6px"}),
+                html.P(
+                    "An interactive dashboard for monitoring systemic risk in "
+                    "the U.S. banking sector — built around the four standard "
+                    "academic measures (MES, LRMES, ΔCoVaR, SRISK) computed "
+                    "from a DCC-GJR-GARCH model on daily equity returns and "
+                    "bank balance-sheet data.",
+                    className="mb-0 text-center mx-auto",
+                    style={"fontSize": "0.88rem", "lineHeight": "1.45",
+                           "color": TEXT_MAIN, "maxWidth": "640px"},
+                ),
+            ], style={**_compact_card,
+                      "borderLeft": f"4px solid {ACCENT_BLUE}",
+                      "height": "100%",
+                      "display": "flex",
+                      "flexDirection": "column",
+                      "justifyContent": "center"}),
+            xs=12, lg=7, className="mb-2",
+        ),
+        # Right — vertical tab bookmark list
+        dbc.Col([
+            html.H6("Explore the dashboard",
+                    className="mb-2",
+                    style={"fontWeight": "700", "color": TEXT_MAIN}),
+            html.Div([
+                _tab_link_row(tab_id, label, desc, glyph)
+                for tab_id, label, desc, glyph in _TABS_META
+            ]),
+        ], xs=12, lg=5, className="mb-2"),
+    ], className="mt-2"),
+
+    # ── Three core measures (live KPIs + explainers) ─────────────────────
+    html.H6("The three core measures",
+            className="mt-1 mb-2",
+            style={"fontWeight": "700", "color": TEXT_MAIN}),
+    dbc.Row([
+        dbc.Col([
+            html.Div(id="kpi-start-mes"),
+            _measure_explainer(
+                "MES — Marginal Expected Shortfall",
+                "Average daily equity loss for the bank when the market is "
+                "in its worst α% of days. Acharya et al. (2017)."),
+        ], xs=12, md=4, className="mb-2"),
+        dbc.Col([
+            html.Div(id="kpi-start-covar"),
+            _measure_explainer(
+                "ΔCoVaR — Conditional VaR contribution",
+                "How much wider market VaR becomes when this bank shifts "
+                "from median to distressed. Adrian & Brunnermeier (2016)."),
+        ], xs=12, md=4, className="mb-2"),
+        dbc.Col([
+            html.Div(id="kpi-start-srisk"),
+            _measure_explainer(
+                "SRISK — Capital shortfall under stress",
+                "Expected capital shortfall under a d% market decline, "
+                "given current leverage. Brownlees & Engle (2017)."),
+        ], xs=12, md=4, className="mb-2"),
+    ]),
+
+    # ── Reference row: indicators · quick start · crisis windows ────────────
+    dbc.Row([
+        dbc.Col(html.Div([
+            html.H6("Reading the risk indicators",
+                    className="mb-1",
+                    style={"fontWeight": "700", "color": TEXT_MAIN,
+                           "fontSize": "0.92rem"}),
+            html.P("Rolling 500-obs percentile of the latest aggregate:",
+                   className="text-muted mb-1",
+                   style={"fontSize": "0.74rem"}),
+            html.Ul([
+                html.Li([
+                    _risk_pill(label, color),
+                    html.Span(desc, style={"fontSize": "0.74rem"}),
+                ], className="mb-1", style={"listStyle": "none"})
+                for label, color, desc in _RISK_LEGEND_ITEMS
+            ], className="ps-0 mb-0"),
+        ], style=_compact_card), xs=12, md=4),
+
+        dbc.Col(html.Div([
+            html.H6("Quick start",
+                    className="mb-1",
+                    style={"fontWeight": "700", "color": TEXT_MAIN,
+                           "fontSize": "0.92rem"}),
+            html.Ul([
+                html.Li([html.B(title + ". "),
+                         html.Span(body)], className="mb-1")
+                for title, body in _HOW_TO_USE
+            ], className="mb-0 ps-3", style={"fontSize": "0.78rem",
+                                             "lineHeight": "1.35"}),
+        ], style=_compact_card), xs=12, md=4),
+
+        dbc.Col(html.Div([
+            html.H6("Marked crisis windows",
+                    className="mb-1",
+                    style={"fontWeight": "700", "color": TEXT_MAIN,
+                           "fontSize": "0.92rem"}),
+            html.P("Shaded on time-series charts:",
+                   className="text-muted mb-1",
+                   style={"fontSize": "0.74rem"}),
+            html.Ul([
+                html.Li([
+                    html.B(f"{label} "),
+                    html.Span(f"({s} → {e})",
+                              className="text-muted",
+                              style={"fontSize": "0.72rem"}),
+                ], className="mb-1")
+                for s, e, label, _ in CRISIS_PERIODS
+            ], className="mb-0 ps-3", style={"fontSize": "0.78rem"}),
+        ], style=_compact_card), xs=12, md=4),
+    ], className="g-2"),
+
+    # ── Data scope footer ──────────────────────────────────────────────────
+    html.Div(
+        html.Small([
+            html.B("Scope: "),
+            f"{len(D.ALL_BANKS)} U.S. banks · daily data "
+            f"{DATE_MIN.isoformat()} → {DATE_MAX.isoformat()} · benchmark "
+            f"{D.MARKET_NAME}. ",
+            html.Span(
+                "Educational / research tool — not investment advice.",
+                className="text-muted",
+            ),
+        ], className="text-muted",
+           style={"fontSize": "0.74rem"}),
+        className="text-center mt-1 mb-2",
+    ),
+
+], fluid=True, className="px-3")
+
 
 overview_layout = dbc.Container([
     dbc.Row([
@@ -1185,12 +1442,13 @@ app.layout = html.Div([
         custom_spinner=_loading_bar,
         overlay_style={"opacity": 0, "backgroundColor": "transparent"},
         children=dbc.Tabs([
+            dbc.Tab(start_layout,         label="Start",                tab_id="tab-start"),
             dbc.Tab(overview_layout,    label="Overview",        tab_id="tab-overview"),
             dbc.Tab(timeseries_layout,    label="Time Series",          tab_id="tab-ts"),
             dbc.Tab(srisk_layout,         label="SRISK",               tab_id="tab-srisk"),
             dbc.Tab(market_dcc_layout,    label="Market & Correlation", tab_id="tab-market"),
             dbc.Tab(methodology_layout,   label="Methodology",          tab_id="tab-methodology"),
-        ], id="main-tabs", active_tab="tab-overview",
+        ], id="main-tabs", active_tab="tab-start",
            style={"paddingLeft": "1rem", "backgroundColor": "#f8f9fa",
                   "borderBottom": f"1px solid {BORDER}"}),
     ),
@@ -1763,6 +2021,29 @@ def update_alpha(alpha):
     )
 
 
+# ── Start-tab bookmark navigation ─────────────────────────────────────────────
+# Clicking any of the 5 tab cards on the Start tab activates the matching
+# tab in the main Tabs component. Pattern-matched ID — single callback
+# handles every card.
+
+@app.callback(
+    Output("main-tabs", "active_tab", allow_duplicate=True),
+    Input({"type": "start-tab-link", "tab": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def jump_to_tab_from_start(_clicks):
+    from dash import callback_context
+    if not callback_context.triggered:
+        return no_update
+    # Skip the spurious "all clicks = 0" fire that can happen on first render.
+    if not any(c for c in (_clicks or []) if c):
+        return no_update
+    triggered = callback_context.triggered_id
+    if not isinstance(triggered, dict):
+        return no_update
+    return triggered.get("tab", no_update)
+
+
 # ── Overview tab ──────────────────────────────────────────────────────────────
 
 @app.callback(
@@ -1771,6 +2052,9 @@ def update_alpha(alpha):
     Output("kpi-covar",        "children"),
     Output("kpi-srisk",        "children"),
     Output("kpi-leverage",     "children"),
+    Output("kpi-start-mes",    "children"),
+    Output("kpi-start-covar",  "children"),
+    Output("kpi-start-srisk",  "children"),
     Output("chart-mes-rank",   "figure"),
     Output("chart-srisk-rank", "figure"),
     Output("chart-covar-rank", "figure"),
@@ -2116,7 +2400,30 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     fig_srisk_dw = delta_ranking_bar(_top_by_abs(d_sri_w), "Δ SRISK (1w) — Top 10",   "Δ SRISK (bn)", divide_bn=True)
     fig_covar_dw = delta_ranking_bar(_top_by_abs(d_cov_w), "Δ ΔCoVaR (1w) — Top 10", "Δ ΔCoVaR (pp)")
 
+    # Start tab mirrors the Overview KPI cards for the three core measures.
+    # Build separate component instances to avoid sharing the same dict
+    # across two outputs.
+    kpi_start_mes = kpi_card("Avg. MES",
+                             _fmt_pct(agg_mes),
+                             "Mean 1-day tail loss",
+                             _ACCENT,
+                             delta_text=mes_badge, delta_direction=mes_dir,
+                             risk_level=mes_risk, risk_tooltip=mes_tip)
+    kpi_start_cov = kpi_card("Avg. |ΔCoVaR|",
+                             _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
+                             "Mean marginal systemic contribution",
+                             _ACCENT,
+                             delta_text=cov_badge, delta_direction=cov_dir,
+                             risk_level=cov_risk, risk_tooltip=cov_tip)
+    kpi_start_srisk = kpi_card("Total SRISK",
+                               _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
+                               "Aggregate capital shortfall estimate",
+                               _ACCENT,
+                               delta_text=srisk_badge, delta_direction=srisk_dir,
+                               risk_level=srisk_risk, risk_tooltip=srisk_tip)
+
     return (kpi_mes, kpi_lrmes, kpi_cov, kpi_srisk, kpi_lvg,
+            kpi_start_mes, kpi_start_cov, kpi_start_srisk,
             fig_mes, fig_srisk, fig_covar,
             fig_mes_dw, fig_srisk_dw, fig_covar_dw,
             table)

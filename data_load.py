@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime
 
 warnings.filterwarnings("ignore")
 
