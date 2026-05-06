@@ -67,9 +67,6 @@ CHART_TEXT_COLOR = "#212529"
 # Pierret (2025) and common literature conventions.
 CRISIS_PERIODS: list[tuple[str, str, str, str]] = [
     # (start,        end,          label,         fillcolor)
-    ("2007-08-01", "2009-06-30", "GFC",          "rgba(198, 40, 40, 0.09)"),
-    ("2010-04-01", "2012-12-31", "Euro Crisis",  "rgba(230, 81,  0, 0.09)"),
-    ("2020-02-20", "2020-04-30", "COVID-19",     "rgba(106, 27, 154, 0.10)"),
     ("2022-01-01", "2022-10-31", "Rate Shock",   "rgba(245,127, 23, 0.09)"),
     ("2023-03-01", "2023-05-31", "SVB / CS",     "rgba(198, 40, 40, 0.10)"),
     ("2025-04-02", "2025-06-30", "Liberation Day / Tariffs", "rgba(21, 101, 192, 0.10)"),
@@ -132,15 +129,6 @@ def fmt_pct(x) -> str:
 
 def fmt_ratio(x) -> str:
     return "N/A" if pd.isna(x) else f"{x:.2f}x"
-
-
-def fmt_ses(x) -> str:
-    """SES: show 'Not binding' for zero/NaN shortfalls, billions otherwise."""
-    if pd.isna(x):
-        return "N/A"
-    if x <= 0:
-        return "Not binding"
-    return f"{x / 1e9:.2f} bn"
 
 
 def fmt_pct_raw(x) -> str:
@@ -365,37 +353,6 @@ def srisk_bar_generic(series: pd.Series, title: str, xlabel: str,
     fig.update_layout(
         title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
         xaxis_title=xlabel,
-        yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
-        height=320,
-        **base,
-    )
-    return fig
-
-
-def srisk_bar(series: pd.Series, title: str) -> go.Figure:
-    s = series.dropna().sort_values(ascending=False)
-    if s.empty:
-        return go.Figure().update_layout(title="No SRISK data", **base_layout())
-    labels = [name_for(t) for t in s.index]
-
-    fig = go.Figure(go.Bar(
-        x=s.values / 1e9, y=labels,
-        orientation="h",
-        marker_color=ACCENT_BLUE,
-        marker_line_width=0,
-        text=[fmt_bn(v) for v in s.values],
-        textposition="auto",
-        insidetextanchor="middle",
-        textfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
-        insidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
-        outsidetextfont=dict(size=CHART_FONT_SIZE, color=CHART_TEXT_COLOR),
-        hovertemplate="%{y}: %{text}<extra></extra>",
-    ))
-    base = base_layout()
-    base["margin"] = dict(l=10, r=80, t=45, b=30)
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
-        xaxis_title="SRISK (bn, native currency)",
         yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,

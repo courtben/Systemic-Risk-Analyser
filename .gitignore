@@ -3,6 +3,15 @@
 # The daily APScheduler job at 06:00 UTC keeps them fresh in-place.
 .claude/
 
+# IDE / editor files
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Python
 __pycache__/
 *.py[cod]

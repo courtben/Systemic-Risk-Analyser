@@ -45,3 +45,12 @@
     border-top-color: #4A8DDC !important;
     border-bottom-color: #4A8DDC !important;
 }
+
+/* Start-tab navigation cards: lift on hover to make the click affordance
+   obvious. dbc.Card is wrapped in a clickable html.Div (.start-tab-link);
+   the visible Card sits one level deeper, so the lift / glow apply there. */
+.start-tab-link:hover .card {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(74, 141, 220, 0.18) !important;
+    border-color: #4A8DDC !important;
+}
