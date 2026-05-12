@@ -404,7 +404,7 @@ controls = dbc.Container([
             html.Div([
                 html.Span(
                     id="alpha-label",
-                    children="Critical Value α = 5.0%  (worst 5% of market days) — applies to MES & ΔCoVaR; LRMES/SRISK are α-invariant (driven by d = 40%)",
+                    children="Critical Value α = 5.0%  (worst 5% of market days)",
                     className="text-muted me-3",
                     style={"fontSize": "0.72rem", "fontWeight": "600"},
                 ),
@@ -476,36 +476,31 @@ _card = {"backgroundColor": BG_CARD,
 # populated by the existing Overview callback so values match the rest of
 # the dashboard exactly.
 
-_TABS_META: list[tuple[str, str, str, str]] = [
-    # (tab_id, label, 1–2 sentence description, glyph)
+_TABS_META: list[tuple[str, str, str]] = [
+    # (tab_id, label, 1–2 sentence description)
     ("tab-overview",
      "Overview",
      "At-a-glance health check: five aggregated KPIs with risk indicators "
      "and 7-day deltas, top-10 ranking bars per measure, and a sortable "
-     "risk-summary table for any snapshot date.",
-     "📊"),
+     "risk-summary table for any snapshot date."),
     ("tab-ts",
      "Time Series",
      "Daily time series of MES, LRMES, ΔCoVaR, and SRISK per selected bank, "
-     "overlaid with the portfolio aggregate and shaded crisis windows.",
-     "📈"),
+     "overlaid with the portfolio aggregate and shaded crisis windows."),
     ("tab-srisk",
      "SRISK",
      "Stress-test SRISK live by tuning the k (capital ratio) and d "
      "(market-decline) sliders, then drill into per-bank breakdowns, "
-     "stacked area, and share pie.",
-     "💰"),
+     "stacked area, and share pie."),
     ("tab-market",
      "Market & Correlation",
      "Rebased equity prices, daily return distributions, and DCC ρ(t) "
      "correlation dynamics — the market-level inputs feeding the "
-     "systemic-risk model.",
-     "🔗"),
+     "systemic-risk model."),
     ("tab-methodology",
      "Methodology",
      "Data sources with refresh schedule, source-paper references, and "
-     "the full formula + parameter card for every model and measure.",
-     "📚"),
+     "the full formula + parameter card for every model and measure."),
 ]
 
 
@@ -519,13 +514,11 @@ def _measure_explainer(title: str, body: str) -> html.Div:
     ])
 
 
-def _tab_link_row(tab_id: str, label: str, desc: str, glyph: str) -> html.Div:
+def _tab_link_row(tab_id: str, label: str, desc: str) -> html.Div:
     """Single full-width clickable row for the vertical tab-bookmark list."""
     inner = dbc.Card(
         dbc.CardBody([
             html.Div([
-                html.Span(glyph, style={"fontSize": "1.1rem",
-                                        "marginRight": "8px"}),
                 html.Div([
                     html.Div(label, style={"fontWeight": "700",
                                            "fontSize": "0.88rem",
@@ -605,7 +598,7 @@ start_layout = dbc.Container([
                       "display": "flex",
                       "flexDirection": "column",
                       "justifyContent": "center"}),
-            xs=12, lg=7, className="mb-2",
+            xs=12, lg=5, className="mb-2",
         ),
         # Right — vertical tab bookmark list
         dbc.Col([
@@ -613,11 +606,13 @@ start_layout = dbc.Container([
                     className="mb-2",
                     style={"fontWeight": "700", "color": TEXT_MAIN}),
             html.Div([
-                _tab_link_row(tab_id, label, desc, glyph)
-                for tab_id, label, desc, glyph in _TABS_META
+                _tab_link_row(tab_id, label, desc)
+                for tab_id, label, desc in _TABS_META
             ]),
-        ], xs=12, lg=5, className="mb-2"),
+        ], xs=12, lg=7, className="mb-2"),
     ], className="mt-2"),
+
+    html.Hr(className="my-2"),
 
     # ── Three core measures (explainers above live KPIs) ─────────────────
     html.H6("The three core measures",
@@ -646,6 +641,8 @@ start_layout = dbc.Container([
             html.Div(id="kpi-start-srisk"),
         ], xs=12, md=4, className="mb-2"),
     ]),
+
+    html.Hr(className="my-2"),
 
     # ── Risk indicator scale — single tight strip ───────────────────────
     html.Div([
@@ -710,59 +707,33 @@ overview_layout = dbc.Container([
         dbc.Col(id="kpi-srisk",    xs=6, md=4, lg=True, className="mb-3"),
         dbc.Col(id="kpi-leverage", xs=6, md=4, lg=True, className="mb-3"),
     ], className="mt-3"),
+
+    html.Hr(className="my-2"),
+
+    # ── Top 10 ranking row ────────────────────────────────────────────────
+    html.H6("Top 10",
+            className="mt-2 mb-2",
+            style={"fontWeight": "700", "color": TEXT_MAIN}),
     dbc.Row([
-        dbc.Col([
-            html.P("Ranks selected banks by their latest MES value. "
-                   "Higher MES signals greater expected daily equity loss when the market is in its worst α% of days.",
-                   className="text-muted mb-1 mt-2",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-mes-rank"),
-        ], xs=12, md=4, className="mb-3"),
-        dbc.Col([
-            html.P("Ranks selected banks by their latest SRISK. "
-                   "Positive SRISK identifies institutions with a capital shortfall under the current stress scenario (d% market decline).",
-                   className="text-muted mb-1 mt-2",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-srisk-rank"),
-        ], xs=12, md=4, className="mb-3"),
-        dbc.Col([
-            html.P("Ranks selected banks by their latest ΔCoVaR. "
-                   "Larger values indicate a greater contribution to market-wide VaR when the firm moves from its median to a distressed state.",
-                   className="text-muted mb-1 mt-2",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-covar-rank"),
-        ], xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-mes-rank"),   xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-srisk-rank"), xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-covar-rank"), xs=12, md=4, className="mb-3"),
     ]),
+
+    html.Hr(className="my-2"),
+
+    # ── 7-day change row ──────────────────────────────────────────────────
+    html.H6("7-day change",
+            className="mt-2 mb-2",
+            style={"fontWeight": "700", "color": TEXT_MAIN}),
     dbc.Row([
-        dbc.Col([
-            html.P("7-day change across measures — identifies banks whose systemic risk profile has shifted most recently.",
-                   className="text-muted mb-1 mt-2",
-                   style={"fontSize": "0.82rem", "fontWeight": "600"}),
-        ], xs=12),
+        dbc.Col(dcc.Graph(id="chart-mes-dw"),   xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-srisk-dw"), xs=12, md=4, className="mb-3"),
+        dbc.Col(dcc.Graph(id="chart-covar-dw"), xs=12, md=4, className="mb-3"),
     ]),
-    dbc.Row([
-        dbc.Col([
-            html.P("Recent shift in MES. "
-                   "Red bars flag banks whose tail sensitivity to the market has increased over the past week.",
-                   className="text-muted mb-1",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-mes-dw"),
-        ], xs=12, md=4, className="mb-3"),
-        dbc.Col([
-            html.P("Recent shift in SRISK. "
-                   "Highlights banks where the estimated capital shortfall under stress has materially widened or narrowed.",
-                   className="text-muted mb-1",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-srisk-dw"),
-        ], xs=12, md=4, className="mb-3"),
-        dbc.Col([
-            html.P("Recent shift in ΔCoVaR. "
-                   "Identifies banks whose contribution to market-wide distress risk has grown or receded in the last seven trading days.",
-                   className="text-muted mb-1",
-                   style={"fontSize": "0.78rem"}),
-            dcc.Graph(id="chart-covar-dw"),
-        ], xs=12, md=4, className="mb-3"),
-    ]),
+
+    html.Hr(className="my-2"),
+
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -862,6 +833,9 @@ timeseries_layout = dbc.Container([
             dcc.Download(id="download-ts"),
         ], xs=12, md=2, className="mt-3 mb-2"),
     ]),
+
+    html.Hr(className="my-2"),
+
     dbc.Row([
         dbc.Col([
             html.P(
@@ -874,6 +848,9 @@ timeseries_layout = dbc.Container([
             dcc.Graph(id="chart-timeseries"),
         ], xs=12),
     ]),
+
+    html.Hr(className="my-2"),
+
     dbc.Row([
         dbc.Col([
             html.Div([
@@ -1082,6 +1059,9 @@ market_dcc_layout = dbc.Container([
             dcc.Download(id="download-dcc"),
         ], xs=12, md=8),
     ]),
+
+    html.Hr(className="my-2"),
+
     dbc.Row([
         dbc.Col([
             html.P(
@@ -1137,56 +1117,75 @@ MEASURE_DESCRIPTIONS: dict[str, str] = {
 # Cards sit in a 2-column responsive grid so the tab scans like a reference
 # sheet rather than a wall of prose.
 
-def _measure_card(title: str, formula_latex: str, description: str,
-                  params: list[tuple[str, str]]) -> dbc.Col:
+def _methodology_card(title: str, formula_latex: str, description: str,
+                      params: list[tuple[str, str]]) -> dbc.Card:
+    """Render one methodology card (without dbc.Col wrapper).
+
+    Used both inside the Methodology tab's grid (wrapped in dbc.Col) and as
+    the body of the hover-popovers attached to every KPI's ⓘ icon.
+    """
     params_md = "\n".join(f"- **{sym}** &mdash; {meaning}"
                           for sym, meaning in params)
+    return dbc.Card(
+        dbc.CardBody([
+            html.H6(title, className="mb-2",
+                    style={"fontWeight": "700",
+                           "color": TEXT_MAIN,
+                           "fontSize": "0.95rem"}),
+            # LaTeX formula block — centered, light grey panel. Allow
+            # horizontal scroll inside the panel as a safety net for the
+            # widest formulas (notably MES) so they never overflow the
+            # surrounding popover / card.
+            html.Div(
+                dcc.Markdown(formula_latex, mathjax=True,
+                             className="mb-0 methodology-formula",
+                             style={"fontSize": "0.95rem"}),
+                style={"backgroundColor": "#f8f9fa",
+                       "border": f"1px solid {BORDER}",
+                       "borderRadius": "6px",
+                       "padding": "10px 14px",
+                       "textAlign": "center",
+                       "marginBottom": "10px",
+                       "overflowX": "auto",
+                       "maxWidth": "100%"},
+            ),
+            html.P(description, className="mb-2",
+                   style={"fontSize": "0.83rem",
+                          "lineHeight": "1.45",
+                          "color": TEXT_MAIN}),
+            html.Div("Parameters",
+                     style={"fontSize": "0.7rem",
+                            "letterSpacing": "0.06em",
+                            "textTransform": "uppercase",
+                            "color": ACCENT_BLUE,
+                            "fontWeight": "700",
+                            "marginBottom": "2px"}),
+            dcc.Markdown(params_md, mathjax=True,
+                         className="mb-0 methodology-params",
+                         style={"fontSize": "0.8rem",
+                                "lineHeight": "1.4"}),
+        ], style={"padding": "14px 16px"}),
+        style={"borderLeft": f"4px solid {ACCENT_BLUE}",
+               "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+               "height": "100%"},
+        className="mb-3",
+    )
+
+
+def _measure_card(title: str, formula_latex: str, description: str,
+                  params: list[tuple[str, str]]) -> dbc.Col:
+    """dbc.Col-wrapped methodology card, used in the Methodology grid."""
     return dbc.Col(
-        dbc.Card(
-            dbc.CardBody([
-                html.H6(title, className="mb-2",
-                        style={"fontWeight": "700",
-                               "color": TEXT_MAIN,
-                               "fontSize": "0.95rem"}),
-                # LaTeX formula block — centered, light grey panel.
-                html.Div(
-                    dcc.Markdown(formula_latex, mathjax=True,
-                                 className="mb-0",
-                                 style={"fontSize": "0.95rem"}),
-                    style={"backgroundColor": "#f8f9fa",
-                           "border": f"1px solid {BORDER}",
-                           "borderRadius": "6px",
-                           "padding": "10px 14px",
-                           "textAlign": "center",
-                           "marginBottom": "10px"},
-                ),
-                html.P(description, className="mb-2",
-                       style={"fontSize": "0.83rem",
-                              "lineHeight": "1.45",
-                              "color": TEXT_MAIN}),
-                html.Div("Parameters",
-                         style={"fontSize": "0.7rem",
-                                "letterSpacing": "0.06em",
-                                "textTransform": "uppercase",
-                                "color": ACCENT_BLUE,
-                                "fontWeight": "700",
-                                "marginBottom": "2px"}),
-                dcc.Markdown(params_md, mathjax=True,
-                             className="mb-0 methodology-params",
-                             style={"fontSize": "0.8rem",
-                                    "lineHeight": "1.4"}),
-            ], style={"padding": "14px 16px"}),
-            style={"borderLeft": f"4px solid {ACCENT_BLUE}",
-                   "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
-                   "height": "100%"},
-            className="mb-3",
-        ),
+        _methodology_card(title, formula_latex, description, params),
         xs=12, lg=6,
     )
 
 
-_VOL_CORR_CARDS = [
-    _measure_card(
+# Single source of truth for every methodology card. The methodology grid
+# wraps each entry in a dbc.Col; the KPI hover-popovers reuse the same
+# data via a fresh _methodology_card() call per render.
+_METHODOLOGY_DATA: dict[str, dict] = {
+    "gjr_garch": dict(
         title="GJR-GARCH(1,1,1) — conditional volatility",
         formula_latex=(
             r"$$h_t = \omega + \alpha_g\,\varepsilon_{t-1}^2 "
@@ -1208,7 +1207,7 @@ _VOL_CORR_CARDS = [
             (r"$h_t,\ \sigma_t$",          "conditional variance and volatility"),
         ],
     ),
-    _measure_card(
+    "dcc": dict(
         title="DCC(1,1) — dynamic conditional correlation",
         formula_latex=(
             r"$$Q_t = (1-a-b)\bar Q + a\,\varepsilon_{t-1}\varepsilon_{t-1}^{\top} "
@@ -1228,11 +1227,7 @@ _VOL_CORR_CARDS = [
             (r"$\rho_t$",       "dynamic conditional correlation (firm vs. market)"),
         ],
     ),
-]
-
-
-_MEASURE_CARDS = [
-    _measure_card(
+    "mes": dict(
         title="MES — Marginal Expected Shortfall",
         formula_latex=(
             r"$$\mathrm{MES}_i(t) = -\min\!\left(\sigma_f(t)\rho(t)\,k_1 "
@@ -1249,7 +1244,7 @@ _MEASURE_CARDS = [
             (r"$\alpha$",      "market tail probability — adjustable in the topbar"),
         ],
     ),
-    _measure_card(
+    "lrmes": dict(
         title="LRMES — Long-Run Marginal Expected Shortfall",
         formula_latex=(
             r"$$\beta(t) = \rho(t)\,\frac{\sigma_f(t)}{\sigma_m(t)}, "
@@ -1268,7 +1263,7 @@ _MEASURE_CARDS = [
             (r"$d$",           "market-decline threshold — slider on the SRISK tab (default 40%)"),
         ],
     ),
-    _measure_card(
+    "covar": dict(
         title="ΔCoVaR — Delta Conditional Value-at-Risk",
         formula_latex=(
             r"$$\Delta\mathrm{CoVaR}_i(t) = b_1\bigl(\mathrm{VaR}_i(t) - "
@@ -1289,7 +1284,7 @@ _MEASURE_CARDS = [
             (r"$\alpha$",             "tail probability — adjustable in the topbar"),
         ],
     ),
-    _measure_card(
+    "srisk": dict(
         title="SRISK — Capital Shortfall under Stress",
         formula_latex=(
             r"$$\mathrm{SRISK}_i(t) = \max\!\left(0,\; k\,\tilde D(t) - "
@@ -1308,7 +1303,7 @@ _MEASURE_CARDS = [
             (r"$d$",                  "market-decline threshold — slider on the SRISK tab (default 40%)"),
         ],
     ),
-    _measure_card(
+    "lvg": dict(
         title="LVG — Quasi-Leverage",
         formula_latex=(
             r"$$\mathrm{LVG}(t) = \frac{D(t) + W(t)}{W(t)}$$"
@@ -1324,21 +1319,38 @@ _MEASURE_CARDS = [
             (r"$D(t)+W(t)$",     "quasi-total assets"),
         ],
     ),
-]
+}
 
 
-# Last cache refresh — read once at module load from the prices parquet
+def _methodology_card_for(key: str) -> dbc.Card:
+    """Fresh methodology card (no dbc.Col wrapper) for the given measure
+    key — used by the KPI hover popovers."""
+    return _methodology_card(**_METHODOLOGY_DATA[key])
+
+
+_VOL_CORR_CARDS = [_measure_card(**_METHODOLOGY_DATA[k])
+                   for k in ("gjr_garch", "dcc")]
+
+_MEASURE_CARDS = [_measure_card(**_METHODOLOGY_DATA[k])
+                  for k in ("mes", "lrmes", "covar", "srisk", "lvg")]
+
+
+# Per-source cache age — read once at module load from each cache file's
 # mtime. The APScheduler job rewrites these files daily at 06:00 UTC.
-def _cache_refresh_ts() -> str:
+def _cache_mtime(path: str) -> str:
     try:
-        ts = os.path.getmtime("cache/prices.parquet")
+        ts = os.path.getmtime(path)
         return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
             "%Y-%m-%d %H:%M UTC")
     except Exception:
         return "unknown"
 
 
-_LAST_REFRESH = _cache_refresh_ts()
+_CACHE_AGE = {
+    "prices":          _cache_mtime("cache/prices.parquet"),
+    "balance_sheet":   _cache_mtime("cache/balance_sheet.json"),
+    "state_variables": _cache_mtime("cache/state_variables.parquet"),
+}
 
 
 def _section_header(title: str) -> html.Div:
@@ -1383,16 +1395,36 @@ methodology_layout = dbc.Container([
                      "FRED."]),
         ], className="mb-2", style={"fontSize": "0.85rem",
                                     "lineHeight": "1.55"}),
-        html.P([
-            html.B("Refresh frequency: "),
-            "Daily at 06:00 UTC.",
-            html.Br(),
-            html.B("Last refresh: "),
-            html.Span(_LAST_REFRESH, style={"fontFamily": "ui-monospace, "
-                                                          "SFMono-Regular, "
-                                                          "Menlo, monospace"}),
-        ], className="text-muted mb-0",
-           style={"fontSize": "0.82rem", "lineHeight": "1.5"}),
+        html.P([html.B("Refresh frequency: "),
+                "Daily at 06:00 UTC."],
+               className="text-muted mb-1",
+               style={"fontSize": "0.82rem", "lineHeight": "1.5"}),
+        html.Div([
+            html.Div(html.B("Last cache update"),
+                     className="text-muted",
+                     style={"fontSize": "0.78rem",
+                            "letterSpacing": "0.05em",
+                            "textTransform": "uppercase",
+                            "marginBottom": "2px"}),
+            html.Ul([
+                html.Li([html.B("Prices: "),
+                         html.Span(_CACHE_AGE["prices"],
+                                   style={"fontFamily": "ui-monospace, "
+                                                        "SFMono-Regular, "
+                                                        "Menlo, monospace"})]),
+                html.Li([html.B("Balance sheets: "),
+                         html.Span(_CACHE_AGE["balance_sheet"],
+                                   style={"fontFamily": "ui-monospace, "
+                                                        "SFMono-Regular, "
+                                                        "Menlo, monospace"})]),
+                html.Li([html.B("State variables: "),
+                         html.Span(_CACHE_AGE["state_variables"],
+                                   style={"fontFamily": "ui-monospace, "
+                                                        "SFMono-Regular, "
+                                                        "Menlo, monospace"})]),
+            ], className="mb-0 text-muted",
+               style={"fontSize": "0.82rem", "lineHeight": "1.5"}),
+        ]),
     ], style=_card),
 
     # ── 2. References ────────────────────────────────────────────────────
@@ -2072,8 +2104,7 @@ def update_alpha(alpha):
 
     print("[α] Done.")
     return alpha, (
-        f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days) — "
-        f"applies to MES & ΔCoVaR; LRMES/SRISK are α-invariant (driven by d = 40%)."
+        f"Critical Value α = {alpha_pct:.1f}% (worst {alpha_pct:.1f}% of market days)"
     )
 
 
@@ -2270,12 +2301,14 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     lvg_risk,   lvg_tip   = _classify_risk(lvg_df,    "mean",     fmt_fn=_fmt_ratio)
 
     _ACCENT = ACCENT_BLUE
-    # Tooltip text mirrors the measure descriptions on the Methodology tab.
-    _info_mes   = MEASURE_DESCRIPTIONS["mes"]
-    _info_lrmes = MEASURE_DESCRIPTIONS["lrmes"]
-    _info_cov   = MEASURE_DESCRIPTIONS["covar"]
-    _info_srisk = MEASURE_DESCRIPTIONS["srisk"]
-    _info_lvg   = MEASURE_DESCRIPTIONS["lvg"]
+    # Hover popover bodies — the full methodology card for each measure.
+    # Build a fresh component per call so Dash doesn't try to deduplicate
+    # the same instance across Overview + Start tab outputs.
+    _info_mes   = _methodology_card_for("mes")
+    _info_lrmes = _methodology_card_for("lrmes")
+    _info_cov   = _methodology_card_for("covar")
+    _info_srisk = _methodology_card_for("srisk")
+    _info_lvg   = _methodology_card_for("lvg")
 
     kpi_mes  = kpi_card("Avg. MES",
                         _fmt_pct(agg_mes),
@@ -2283,35 +2316,40 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
                         _ACCENT,
                         delta_text=mes_badge, delta_direction=mes_dir,
                         risk_level=mes_risk, risk_tooltip=mes_tip,
-                        info_text=_info_mes, info_id="info-icon-overview-mes")
+                        info_content=_info_mes,
+                        info_id="info-icon-overview-mes")
     kpi_lrmes = kpi_card("Avg. LRMES",
                         _fmt_pct(agg_lrmes),
                         "Long-run MES at d-decline scenario",
                         _ACCENT,
                         delta_text=lrmes_badge, delta_direction=lrmes_dir,
                         risk_level=lrmes_risk, risk_tooltip=lrmes_tip,
-                        info_text=_info_lrmes, info_id="info-icon-overview-lrmes")
+                        info_content=_info_lrmes,
+                        info_id="info-icon-overview-lrmes")
     kpi_cov  = kpi_card("Avg. |ΔCoVaR|",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                         "Mean marginal systemic contribution",
                         _ACCENT,
                         delta_text=cov_badge, delta_direction=cov_dir,
                         risk_level=cov_risk, risk_tooltip=cov_tip,
-                        info_text=_info_cov, info_id="info-icon-overview-covar")
+                        info_content=_info_cov,
+                        info_id="info-icon-overview-covar")
     kpi_srisk = kpi_card("Total SRISK",
                          _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
                          "Aggregate capital shortfall estimate",
                          _ACCENT,
                          delta_text=srisk_badge, delta_direction=srisk_dir,
                          risk_level=srisk_risk, risk_tooltip=srisk_tip,
-                         info_text=_info_srisk, info_id="info-icon-overview-srisk")
+                         info_content=_info_srisk,
+                         info_id="info-icon-overview-srisk")
     kpi_lvg  = kpi_card("Avg. Leverage",
                         _fmt_ratio(agg_lvg),
                         "(Liabilities + Market Cap) / Market Cap",
                         _ACCENT,
                         delta_text=lvg_badge, delta_direction=lvg_dir,
                         risk_level=lvg_risk, risk_tooltip=lvg_tip,
-                        info_text=_info_lvg, info_id="info-icon-overview-lvg")
+                        info_content=_info_lvg,
+                        info_id="info-icon-overview-lvg")
 
     # Overview ranking bars — show only the top 10 banks per measure
     _TOP_N = 10
@@ -2321,9 +2359,9 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     _srisk_pos = latest_srisk[latest_srisk > 0].dropna()
     _srisk_top = _srisk_pos.nlargest(_TOP_N)
 
-    fig_mes   = ranking_bar(_mes_top,   "MES Ranking — Top 10 (latest)",        "MES")
-    fig_srisk = ranking_bar(_srisk_top, "SRISK Ranking — Top 10 (latest)",      "SRISK (bn)", fmt_fn=_fmt_bn)
-    fig_covar = ranking_bar(_covar_top, "|ΔCoVaR| Ranking — Top 10 (latest)",   "|ΔCoVaR|")
+    fig_mes   = ranking_bar(_mes_top,   "MES",       "", )
+    fig_srisk = ranking_bar(_srisk_top, "SRISK",     "", fmt_fn=_fmt_bn)
+    fig_covar = ranking_bar(_covar_top, "|ΔCoVaR|",  "", )
 
     # ── Δ-last-week / Δ-last-month deltas ─────────────────────────────────────
     # Per-column Series.asof is used instead of DataFrame.asof: the latter
@@ -2464,20 +2502,21 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
         top_idx = s.abs().nlargest(n).index
         return s.reindex(top_idx)
 
-    fig_mes_dw   = delta_ranking_bar(_top_by_abs(d_mes_w), "Δ MES (1w) — Top 10",     "Δ MES (pp)")
-    fig_srisk_dw = delta_ranking_bar(_top_by_abs(d_sri_w), "Δ SRISK (1w) — Top 10",   "Δ SRISK (bn)", divide_bn=True)
-    fig_covar_dw = delta_ranking_bar(_top_by_abs(d_cov_w), "Δ ΔCoVaR (1w) — Top 10", "Δ ΔCoVaR (pp)")
+    fig_mes_dw   = delta_ranking_bar(_top_by_abs(d_mes_w), "Δ MES",     "")
+    fig_srisk_dw = delta_ranking_bar(_top_by_abs(d_sri_w), "Δ SRISK",   "", divide_bn=True)
+    fig_covar_dw = delta_ranking_bar(_top_by_abs(d_cov_w), "Δ ΔCoVaR",  "")
 
     # Start tab mirrors the Overview KPI cards for the three core measures.
-    # Build separate component instances to avoid sharing the same dict
-    # across two outputs.
+    # Build separate component instances (including fresh methodology
+    # cards for the popovers) so Dash isn't asked to render the same
+    # subtree twice in the layout.
     kpi_start_mes = kpi_card("Avg. MES",
                              _fmt_pct(agg_mes),
                              "Mean 1-day tail loss",
                              _ACCENT,
                              delta_text=mes_badge, delta_direction=mes_dir,
                              risk_level=mes_risk, risk_tooltip=mes_tip,
-                             info_text=_info_mes,
+                             info_content=_methodology_card_for("mes"),
                              info_id="info-icon-start-mes")
     kpi_start_cov = kpi_card("Avg. |ΔCoVaR|",
                              _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
@@ -2485,7 +2524,7 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
                              _ACCENT,
                              delta_text=cov_badge, delta_direction=cov_dir,
                              risk_level=cov_risk, risk_tooltip=cov_tip,
-                             info_text=_info_cov,
+                             info_content=_methodology_card_for("covar"),
                              info_id="info-icon-start-covar")
     kpi_start_srisk = kpi_card("Total SRISK",
                                _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
@@ -2493,7 +2532,7 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
                                _ACCENT,
                                delta_text=srisk_badge, delta_direction=srisk_dir,
                                risk_level=srisk_risk, risk_tooltip=srisk_tip,
-                               info_text=_info_srisk,
+                               info_content=_methodology_card_for("srisk"),
                                info_id="info-icon-start-srisk")
 
     return (kpi_mes, kpi_lrmes, kpi_cov, kpi_srisk, kpi_lvg,

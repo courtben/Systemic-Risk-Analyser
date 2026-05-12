@@ -187,8 +187,9 @@ def delta_ranking_bar(series: pd.Series, title: str, xlabel: str,
     left_margin = max(120, min(220, int(7.0 * longest)))
     base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
-        xaxis_title=xlabel,
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE),
+                   x=0.5, xanchor="center"),
+        xaxis_title=xlabel or None,
         yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
@@ -226,8 +227,9 @@ def ranking_bar(series: pd.Series, title: str, xlabel: str,
     left_margin = max(120, min(220, int(7.0 * longest)))
     base["margin"] = dict(l=left_margin, r=70, t=45, b=30)
     fig.update_layout(
-        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE)),
-        xaxis_title=xlabel,
+        title=dict(text=title, font=dict(size=CHART_TITLE_SIZE),
+                   x=0.5, xanchor="center"),
+        xaxis_title=xlabel or None,
         yaxis=dict(autorange="reversed", tickfont=dict(size=CHART_FONT_SIZE)),
         height=320,
         **base,
@@ -755,7 +757,7 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
              delta_direction: str = "neutral",
              risk_level: str | None = None,
              risk_tooltip: str | None = None,
-             info_text: str | None = None,
+             info_content=None,
              info_id: str | None = None) -> dbc.Card:
     """KPI card with an optional 7-day delta badge.
 
@@ -767,8 +769,9 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
     risk_level ∈ {"Low", "Medium", "High", None} renders a coloured pill
     inline next to the value, derived from the rolling-percentile classifier.
 
-    info_text + info_id render a small ⓘ icon next to the title with a
-    Bootstrap tooltip showing the measure's methodology description.
+    info_content + info_id render a small circular "i" icon next to the
+    title. On hover, a dbc.Popover containing ``info_content`` (a Dash
+    component — typically the matching methodology card) is shown.
     """
     badge_colour = {"up": ACCENT_RED, "down": ACCENT_GREEN,
                     "neutral": "#6c757d"}.get(delta_direction, "#6c757d")
@@ -809,21 +812,36 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
     else:
         value_row = value_node
 
-    # Title row (optionally with an info ⓘ icon that triggers a Bootstrap
-    # tooltip showing the methodology description).
+    # Title row (optionally with a small circular "i" icon that triggers a
+    # dbc.Popover containing the methodology card on hover).
+    has_info = info_content is not None and info_id is not None
     title_children: list = [title]
-    if info_text and info_id:
+    if has_info:
         title_children.extend([
             " ",
             html.Span(
-                "ⓘ",
+                "i",
                 id=info_id,
+                className="kpi-info-icon",
                 style={
                     "cursor": "help",
-                    "color": "#6c757d",
-                    "fontSize": "0.85rem",
-                    "marginLeft": "4px",
+                    "color": ACCENT_BLUE,
+                    "border": f"1.5px solid {ACCENT_BLUE}",
+                    "borderRadius": "50%",
+                    "width": "16px",
+                    "height": "16px",
+                    "display": "inline-flex",
+                    "alignItems": "center",
+                    "justifyContent": "center",
+                    "fontSize": "0.66rem",
+                    "fontStyle": "italic",
+                    "fontWeight": "700",
+                    "fontFamily": "Georgia, 'Times New Roman', serif",
+                    "marginLeft": "6px",
                     "verticalAlign": "middle",
+                    "lineHeight": "1",
+                    "userSelect": "none",
+                    "transition": "background-color 0.15s, color 0.15s",
                 },
             ),
         ])
@@ -834,10 +852,17 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
                       "letterSpacing": "0.05em", "textTransform": "uppercase"}),
         value_row,
     ]
-    if info_text and info_id:
+    if has_info:
         body_children.append(
-            dbc.Tooltip(info_text, target=info_id, placement="top",
-                        style={"fontSize": "0.78rem", "maxWidth": "320px"})
+            dbc.Popover(
+                dbc.PopoverBody(info_content,
+                                style={"padding": 0,
+                                       "backgroundColor": "transparent"}),
+                target=info_id,
+                trigger="hover focus",
+                placement="auto",
+                className="kpi-info-popover",
+            )
         )
     if delta_text:
         body_children.append(
