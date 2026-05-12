@@ -67,3 +67,40 @@
 .methodology-params p {
     margin-bottom: 0;
 }
+
+/* KPI info ⓘ icon — fills with the accent colour on hover for a clear
+   click/hover affordance. */
+.kpi-info-icon:hover {
+    background-color: #4A8DDC !important;
+    color: #ffffff !important;
+}
+
+/* KPI info popover — wide enough to fit a full methodology card with the
+   LaTeX formula on a single line; minimal padding so the embedded Card
+   visual is what the user sees, not the surrounding popover chrome. */
+.kpi-info-popover {
+    max-width: 540px !important;
+    min-width: 360px !important;
+}
+.kpi-info-popover .popover-body {
+    padding: 0 !important;
+}
+.kpi-info-popover .card {
+    box-shadow: none !important;
+    border: none !important;
+    margin-bottom: 0 !important;
+}
+
+/* MathJax containers occasionally render wider than the popover / card
+   they live in, especially for MES. Constrain to the available width and
+   slightly shrink the in-popover font so even the widest formula fits.
+   The surrounding panel already has overflow-x: auto as a final fallback. */
+.methodology-formula mjx-container {
+    max-width: 100%;
+}
+.kpi-info-popover .methodology-formula {
+    font-size: 0.85rem;
+}
+.kpi-info-popover .methodology-formula mjx-container {
+    font-size: 95% !important;
+}
