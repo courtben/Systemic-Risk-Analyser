@@ -754,7 +754,9 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
              delta_text: str | None = None,
              delta_direction: str = "neutral",
              risk_level: str | None = None,
-             risk_tooltip: str | None = None) -> dbc.Card:
+             risk_tooltip: str | None = None,
+             info_text: str | None = None,
+             info_id: str | None = None) -> dbc.Card:
     """KPI card with an optional 7-day delta badge.
 
     delta_direction ∈ {"up", "down", "neutral"} controls colour:
@@ -764,6 +766,9 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
 
     risk_level ∈ {"Low", "Medium", "High", None} renders a coloured pill
     inline next to the value, derived from the rolling-percentile classifier.
+
+    info_text + info_id render a small ⓘ icon next to the title with a
+    Bootstrap tooltip showing the measure's methodology description.
     """
     badge_colour = {"up": ACCENT_RED, "down": ACCENT_GREEN,
                     "neutral": "#6c757d"}.get(delta_direction, "#6c757d")
@@ -804,12 +809,36 @@ def kpi_card(title: str, value: str, subtitle: str, accent: str,
     else:
         value_row = value_node
 
+    # Title row (optionally with an info ⓘ icon that triggers a Bootstrap
+    # tooltip showing the methodology description).
+    title_children: list = [title]
+    if info_text and info_id:
+        title_children.extend([
+            " ",
+            html.Span(
+                "ⓘ",
+                id=info_id,
+                style={
+                    "cursor": "help",
+                    "color": "#6c757d",
+                    "fontSize": "0.85rem",
+                    "marginLeft": "4px",
+                    "verticalAlign": "middle",
+                },
+            ),
+        ])
+
     body_children = [
-        html.P(title, className="mb-1 text-muted text-center",
+        html.P(title_children, className="mb-1 text-muted text-center",
                style={"fontSize": "0.78rem", "fontWeight": "600",
                       "letterSpacing": "0.05em", "textTransform": "uppercase"}),
         value_row,
     ]
+    if info_text and info_id:
+        body_children.append(
+            dbc.Tooltip(info_text, target=info_id, placement="top",
+                        style={"fontSize": "0.78rem", "maxWidth": "320px"})
+        )
     if delta_text:
         body_children.append(
             html.Div(

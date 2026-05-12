@@ -54,3 +54,16 @@
     box-shadow: 0 4px 12px rgba(74, 141, 220, 0.18) !important;
     border-color: #4A8DDC !important;
 }
+
+/* Methodology cards — keep the parameter Markdown list tight: kill the
+   default dcc.Markdown paragraph margins, tighten <ul> indent. */
+.methodology-params ul {
+    padding-left: 1.1rem;
+    margin-bottom: 0;
+}
+.methodology-params li {
+    margin-bottom: 2px;
+}
+.methodology-params p {
+    margin-bottom: 0;
+}

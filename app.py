@@ -27,6 +27,7 @@ except Exception:
 import pandas as pd
 import plotly.graph_objects as go
 import os
+from datetime import datetime, timezone
 
 import io
 import json
@@ -72,25 +73,25 @@ print("=" * 60)
 import data_load as D
 import systemic_measures as M
 
-print("\n[1/4] Fetching price data ...")
+print("\n[1/7] Fetching price data ...")
 PRICES = D.get_prices()
 
-print("\n[2/4] Computing returns ...")
+print("\n[2/7] Computing returns ...")
 RETURNS = D.compute_returns(PRICES)
 
-print("\n[3/5] Fetching balance sheet data ...")
+print("\n[3/7] Fetching balance sheet data ...")
 BS = D.get_balance_sheet()
 
-print("\n[4/6] Fetching liabilities and separate-account time series ...")
+print("\n[4/7] Fetching liabilities and separate-account time series ...")
 LIAB_TS      = D.get_liabilities_ts()
 SEP_ACCT_TS  = D.get_separate_accounts_ts()
 LB_DAILY     = D.build_lb_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
 LBR_DAILY    = D.build_lbr_daily(LIAB_TS, PRICES, SEP_ACCT_TS)
 
-print("\n[5/6] Fetching systemic state variables ...")
+print("\n[5/7] Fetching systemic state variables ...")
 STATE_VARS = D.get_state_variables(PRICES)
 
-print("\n[6/6] Computing systemic risk measures (DCC-GJR-GARCH) ...")
+print("\n[6/7] Computing systemic risk measures (DCC-GJR-GARCH) ...")
 MC_TS    = D.build_market_cap_series(PRICES, BS)
 # Returns dict with keys: 'mes', 'ses', 'covar', 'delta_covar', 'srisk'
 MEASURES = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS)
@@ -424,8 +425,41 @@ controls = dbc.Container([
         ),
     ], className="gy-0 mt-1"),
 ], fluid=True, className="py-1 px-3",
-   style={"backgroundColor": "#f8f9fa",
-          "borderBottom": f"1px solid {BORDER}"})
+   style={"backgroundColor": "#f8f9fa"})
+
+
+# ── Collapsible wrapper around the filter bar ────────────────────────────────
+# The whole "Date range / Banks / α" block can be hidden so plots get more
+# vertical space. A thin toggle bar at the top flips a dbc.Collapse and
+# swaps the caret glyph (▼ ↔ ▶).
+
+controls_section = html.Div([
+    html.Div([
+        dbc.Button(
+            [
+                html.Span("▼", id="filters-caret",
+                          style={"display": "inline-block",
+                                 "transition": "transform 0.15s",
+                                 "marginRight": "6px"}),
+                "Filters",
+            ],
+            id="btn-toggle-filters",
+            color="link",
+            size="sm",
+            n_clicks=0,
+            className="p-0 text-decoration-none",
+            style={"fontSize": "0.78rem", "fontWeight": "600",
+                   "color": TEXT_MAIN},
+        ),
+    ], className="px-3 py-1",
+       style={"backgroundColor": "#f8f9fa"}),
+    dbc.Collapse(
+        controls,
+        id="filters-collapse",
+        is_open=True,
+    ),
+], style={"borderBottom": f"1px solid {BORDER}"})
+
 
 # ── Tab content ───────────────────────────────────────────────────────────────
 
@@ -443,36 +477,44 @@ _card = {"backgroundColor": BG_CARD,
 # the dashboard exactly.
 
 _TABS_META: list[tuple[str, str, str, str]] = [
-    # (tab_id, label, one-line description, FontAwesome-like glyph emoji)
+    # (tab_id, label, 1–2 sentence description, glyph)
     ("tab-overview",
      "Overview",
-     "Latest aggregated risk measures, top-bank rankings, and 7-day shifts.",
+     "At-a-glance health check: five aggregated KPIs with risk indicators "
+     "and 7-day deltas, top-10 ranking bars per measure, and a sortable "
+     "risk-summary table for any snapshot date.",
      "📊"),
     ("tab-ts",
      "Time Series",
-     "Per-bank time series for MES, LRMES, ΔCoVaR, SRISK with crisis bands.",
+     "Daily time series of MES, LRMES, ΔCoVaR, and SRISK per selected bank, "
+     "overlaid with the portfolio aggregate and shaded crisis windows.",
      "📈"),
     ("tab-srisk",
      "SRISK",
-     "Capital-shortfall scenario tool: tune k and d, drill into per-bank SRISK.",
+     "Stress-test SRISK live by tuning the k (capital ratio) and d "
+     "(market-decline) sliders, then drill into per-bank breakdowns, "
+     "stacked area, and share pie.",
      "💰"),
     ("tab-market",
      "Market & Correlation",
-     "Rebased prices, return distributions, and DCC correlation dynamics.",
+     "Rebased equity prices, daily return distributions, and DCC ρ(t) "
+     "correlation dynamics — the market-level inputs feeding the "
+     "systemic-risk model.",
      "🔗"),
     ("tab-methodology",
      "Methodology",
-     "Definitions, formulas, parameter choices, and academic references.",
+     "Data sources with refresh schedule, source-paper references, and "
+     "the full formula + parameter card for every model and measure.",
      "📚"),
 ]
 
 
 def _measure_explainer(title: str, body: str) -> html.Div:
     return html.Div([
-        html.H6(title, className="mb-1 mt-1",
+        html.H6(title, className="mb-1 mt-0",
                 style={"fontWeight": "700", "color": TEXT_MAIN,
                        "fontSize": "0.92rem"}),
-        html.P(body, className="text-muted mb-0",
+        html.P(body, className="text-muted mb-2",
                style={"fontSize": "0.78rem", "lineHeight": "1.35"}),
     ])
 
@@ -514,13 +556,6 @@ def _tab_link_row(tab_id: str, label: str, desc: str, glyph: str) -> html.Div:
     )
 
 
-_RISK_LEGEND_ITEMS = [
-    ("Low",    ACCENT_GREEN, "Latest aggregate is below the 70th percentile of the last 500 observations."),
-    ("Medium", ACCENT_AMBER, "Latest aggregate sits between the 70th and 90th percentiles — elevated but not extreme."),
-    ("High",   ACCENT_RED,   "Latest aggregate is at or above the 90th percentile — historically stressful regime."),
-]
-
-
 def _risk_pill(label: str, color: str) -> html.Span:
     return html.Span(
         label,
@@ -538,18 +573,6 @@ def _risk_pill(label: str, color: str) -> html.Span:
             "marginRight": "10px",
         },
     )
-
-
-_HOW_TO_USE = [
-    ("Filter the universe",
-     "Use the bank, country, and date-range pickers in the top bar to scope every chart and KPI."),
-    ("Hover for detail",
-     "Every chart point and risk pill carries a tooltip with the underlying numbers and percentile context."),
-    ("Tune SRISK assumptions",
-     "On the SRISK tab, the k (capital ratio) and d (market-decline) sliders let you stress-test scenarios live."),
-    ("Pick a snapshot date",
-     "Inside the Overview tab, the snapshot picker recomputes the risk-summary table at any historical day in range."),
-]
 
 
 _compact_card = {**_card, "padding": "10px 14px", "marginBottom": "10px"}
@@ -596,85 +619,69 @@ start_layout = dbc.Container([
         ], xs=12, lg=5, className="mb-2"),
     ], className="mt-2"),
 
-    # ── Three core measures (live KPIs + explainers) ─────────────────────
+    # ── Three core measures (explainers above live KPIs) ─────────────────
     html.H6("The three core measures",
             className="mt-1 mb-2",
             style={"fontWeight": "700", "color": TEXT_MAIN}),
     dbc.Row([
         dbc.Col([
-            html.Div(id="kpi-start-mes"),
             _measure_explainer(
                 "MES — Marginal Expected Shortfall",
                 "Average daily equity loss for the bank when the market is "
                 "in its worst α% of days. Acharya et al. (2017)."),
+            html.Div(id="kpi-start-mes"),
         ], xs=12, md=4, className="mb-2"),
         dbc.Col([
-            html.Div(id="kpi-start-covar"),
             _measure_explainer(
                 "ΔCoVaR — Conditional VaR contribution",
                 "How much wider market VaR becomes when this bank shifts "
                 "from median to distressed. Adrian & Brunnermeier (2016)."),
+            html.Div(id="kpi-start-covar"),
         ], xs=12, md=4, className="mb-2"),
         dbc.Col([
-            html.Div(id="kpi-start-srisk"),
             _measure_explainer(
                 "SRISK — Capital shortfall under stress",
                 "Expected capital shortfall under a d% market decline, "
                 "given current leverage. Brownlees & Engle (2017)."),
+            html.Div(id="kpi-start-srisk"),
         ], xs=12, md=4, className="mb-2"),
     ]),
 
-    # ── Reference row: indicators · quick start · crisis windows ────────────
-    dbc.Row([
-        dbc.Col(html.Div([
-            html.H6("Reading the risk indicators",
-                    className="mb-1",
-                    style={"fontWeight": "700", "color": TEXT_MAIN,
-                           "fontSize": "0.92rem"}),
-            html.P("Rolling 500-obs percentile of the latest aggregate:",
-                   className="text-muted mb-1",
-                   style={"fontSize": "0.74rem"}),
-            html.Ul([
-                html.Li([
-                    _risk_pill(label, color),
-                    html.Span(desc, style={"fontSize": "0.74rem"}),
-                ], className="mb-1", style={"listStyle": "none"})
-                for label, color, desc in _RISK_LEGEND_ITEMS
-            ], className="ps-0 mb-0"),
-        ], style=_compact_card), xs=12, md=4),
-
-        dbc.Col(html.Div([
-            html.H6("Quick start",
-                    className="mb-1",
-                    style={"fontWeight": "700", "color": TEXT_MAIN,
-                           "fontSize": "0.92rem"}),
-            html.Ul([
-                html.Li([html.B(title + ". "),
-                         html.Span(body)], className="mb-1")
-                for title, body in _HOW_TO_USE
-            ], className="mb-0 ps-3", style={"fontSize": "0.78rem",
-                                             "lineHeight": "1.35"}),
-        ], style=_compact_card), xs=12, md=4),
-
-        dbc.Col(html.Div([
-            html.H6("Marked crisis windows",
-                    className="mb-1",
-                    style={"fontWeight": "700", "color": TEXT_MAIN,
-                           "fontSize": "0.92rem"}),
-            html.P("Shaded on time-series charts:",
-                   className="text-muted mb-1",
-                   style={"fontSize": "0.74rem"}),
-            html.Ul([
-                html.Li([
-                    html.B(f"{label} "),
-                    html.Span(f"({s} → {e})",
-                              className="text-muted",
-                              style={"fontSize": "0.72rem"}),
-                ], className="mb-1")
-                for s, e, label, _ in CRISIS_PERIODS
-            ], className="mb-0 ps-3", style={"fontSize": "0.78rem"}),
-        ], style=_compact_card), xs=12, md=4),
-    ], className="g-2"),
+    # ── Risk indicator scale — single tight strip ───────────────────────
+    html.Div([
+        html.Span("Risk indicator scale",
+                  style={"fontWeight": "700",
+                         "fontSize": "0.78rem",
+                         "letterSpacing": "0.05em",
+                         "textTransform": "uppercase",
+                         "color": TEXT_MAIN,
+                         "marginRight": "16px"}),
+        html.Span(
+            "rolling 500-obs percentile of the latest aggregate:",
+            className="text-muted",
+            style={"fontSize": "0.78rem", "marginRight": "16px"},
+        ),
+        *[
+            html.Span([
+                _risk_pill(label, color),
+                html.Span(
+                    band,
+                    className="text-muted",
+                    style={"fontSize": "0.78rem", "marginRight": "18px"},
+                ),
+            ])
+            for label, color, band in [
+                ("Low",    ACCENT_GREEN, "below the 70th percentile"),
+                ("Medium", ACCENT_AMBER, "70th – 90th percentile"),
+                ("High",   ACCENT_RED,   "at or above the 90th percentile"),
+            ]
+        ],
+    ], style={**_compact_card,
+              "display": "flex",
+              "alignItems": "center",
+              "flexWrap": "wrap",
+              "rowGap": "6px",
+              "marginTop": "4px"}),
 
     # ── Data scope footer ──────────────────────────────────────────────────
     html.Div(
@@ -1099,316 +1106,343 @@ market_dcc_layout = dbc.Container([
 
 
 # ── Methodology tab ──────────────────────────────────────────────────────────
+# Plain-text descriptions of each measure — shared by the Methodology tab
+# (rendered with $\\alpha$, $d$ inside LaTeX) and the small ⓘ tooltips next
+# to every Overview / Start KPI card. Keeping them in one dict guarantees
+# the tooltip mirrors the methodology card exactly.
+MEASURE_DESCRIPTIONS: dict[str, str] = {
+    "mes":
+        "Expected daily equity loss of the firm conditional on the market "
+        "being in its worst α% of days. Acharya et al. (2017).",
+    "lrmes":
+        "Closed-form expected equity loss over a multi-month horizon given "
+        "a market decline of d. α-invariant — driven entirely by the "
+        "DCC-implied conditional beta. Brownlees & Engle (2017).",
+    "covar":
+        "How much wider the market's Value-at-Risk becomes when bank i "
+        "shifts from its median state to a distressed state, via IRLS "
+        "quantile regression at α. Adrian & Brunnermeier (2016).",
+    "srisk":
+        "Expected equity capital shortfall of a bank under a market "
+        "decline of d — the gap between stressed equity and the prudential "
+        "minimum. Brownlees & Engle (2017).",
+    "lvg":
+        "Ratio of quasi-total assets (liabilities + equity) to equity. "
+        "Higher LVG signals a thinner equity cushion to absorb tail events.",
+}
 
-def _var_legend(variables: list) -> html.P:
-    """Inline variable key: sym = meaning · sym = meaning · ..."""
-    parts = []
-    for i, (sym, meaning) in enumerate(variables):
-        if i > 0:
-            parts.append("  ·  ")
-        parts.append(html.B(sym, style={"fontFamily": "monospace",
-                                        "fontSize": "0.78rem"}))
-        parts.append(f" = {meaning}")
-    return html.P(parts, className="text-muted mb-0",
-                  style={"fontSize": "0.78rem", "lineHeight": "1.75"})
+# Each model / measure is rendered as a uniform card:
+#   Title  →  LaTeX formula (MathJax)  →  1–2 sentence description
+#         →  parameter bullets (1 bullet per symbol).
+# Cards sit in a 2-column responsive grid so the tab scans like a reference
+# sheet rather than a wall of prose.
+
+def _measure_card(title: str, formula_latex: str, description: str,
+                  params: list[tuple[str, str]]) -> dbc.Col:
+    params_md = "\n".join(f"- **{sym}** &mdash; {meaning}"
+                          for sym, meaning in params)
+    return dbc.Col(
+        dbc.Card(
+            dbc.CardBody([
+                html.H6(title, className="mb-2",
+                        style={"fontWeight": "700",
+                               "color": TEXT_MAIN,
+                               "fontSize": "0.95rem"}),
+                # LaTeX formula block — centered, light grey panel.
+                html.Div(
+                    dcc.Markdown(formula_latex, mathjax=True,
+                                 className="mb-0",
+                                 style={"fontSize": "0.95rem"}),
+                    style={"backgroundColor": "#f8f9fa",
+                           "border": f"1px solid {BORDER}",
+                           "borderRadius": "6px",
+                           "padding": "10px 14px",
+                           "textAlign": "center",
+                           "marginBottom": "10px"},
+                ),
+                html.P(description, className="mb-2",
+                       style={"fontSize": "0.83rem",
+                              "lineHeight": "1.45",
+                              "color": TEXT_MAIN}),
+                html.Div("Parameters",
+                         style={"fontSize": "0.7rem",
+                                "letterSpacing": "0.06em",
+                                "textTransform": "uppercase",
+                                "color": ACCENT_BLUE,
+                                "fontWeight": "700",
+                                "marginBottom": "2px"}),
+                dcc.Markdown(params_md, mathjax=True,
+                             className="mb-0 methodology-params",
+                             style={"fontSize": "0.8rem",
+                                    "lineHeight": "1.4"}),
+            ], style={"padding": "14px 16px"}),
+            style={"borderLeft": f"4px solid {ACCENT_BLUE}",
+                   "boxShadow": "0 1px 3px rgba(0,0,0,0.06)",
+                   "height": "100%"},
+            className="mb-3",
+        ),
+        xs=12, lg=6,
+    )
 
 
-def _formula_block(name: str, formula: str, description: str = "",
-                   variables: list | None = None, note: str = "") -> html.Div:
-    children = [
-        html.P(name, className="mb-1",
-               style={"fontWeight": "700", "fontSize": "0.95rem",
-                      "color": TEXT_MAIN}),
-        html.Pre(formula,
-                 style={"backgroundColor": "#f8f9fa",
-                        "padding": "10px 14px", "borderRadius": "4px",
-                        "border": f"1px solid {BORDER}",
-                        "fontSize": "0.85rem", "marginBottom": "6px",
-                        "whiteSpace": "pre-wrap"}),
-    ]
-    if description:
-        children.append(html.P(description, className="text-muted mb-1",
-                               style={"fontSize": "0.83rem"}))
-    if variables:
-        children.append(_var_legend(variables))
-    if note:
-        children.append(
-            html.P(["ℹ ", note], className="text-muted mb-3 mt-1",
-                   style={"fontSize": "0.77rem", "fontStyle": "italic"})
-        )
-    else:
-        children.append(html.Div(className="mb-3"))
-    return html.Div(children)
+_VOL_CORR_CARDS = [
+    _measure_card(
+        title="GJR-GARCH(1,1,1) — conditional volatility",
+        formula_latex=(
+            r"$$h_t = \omega + \alpha_g\,\varepsilon_{t-1}^2 "
+            r"+ \gamma\,\varepsilon_{t-1}^2\,\mathbb{1}_{\{\varepsilon_{t-1}<0\}} "
+            r"+ \beta_g\,h_{t-1}, \quad \sigma_t = \sqrt{h_t}$$"
+        ),
+        description=(
+            "Time-varying conditional volatility with an asymmetric leverage "
+            "effect — negative return shocks amplify future volatility more "
+            "than positive shocks of equal size. Fitted separately to the "
+            "market index and each firm's return series."
+        ),
+        params=[
+            (r"$\omega$",                  "long-run variance floor"),
+            (r"$\alpha_g$",                "ARCH effect — sensitivity to past shock size"),
+            (r"$\gamma$",                  "leverage effect — extra amplification for negative shocks"),
+            (r"$\beta_g$",                 "GARCH persistence of conditional variance"),
+            (r"$\varepsilon_t$",           "return innovation (equals $r_t$ under the zero-mean assumption)"),
+            (r"$h_t,\ \sigma_t$",          "conditional variance and volatility"),
+        ],
+    ),
+    _measure_card(
+        title="DCC(1,1) — dynamic conditional correlation",
+        formula_latex=(
+            r"$$Q_t = (1-a-b)\bar Q + a\,\varepsilon_{t-1}\varepsilon_{t-1}^{\top} "
+            r"+ b\,Q_{t-1}, \quad "
+            r"\rho_t = \frac{Q_t^{(1,2)}}{\sqrt{Q_t^{(1,1)}\,Q_t^{(2,2)}}}$$"
+        ),
+        description=(
+            "Tracks the time-varying pairwise correlation between each bank "
+            "and the market index after standardising for GARCH-fitted "
+            "volatility, mean-reverting to its unconditional level $\\bar Q$."
+        ),
+        params=[
+            (r"$\bar Q$",       "unconditional covariance of standardised residuals"),
+            (r"$\varepsilon_t$","standardised residual vector $[r_m/\\sigma_m,\\ r_f/\\sigma_f]$"),
+            (r"$a$",            "DCC shock sensitivity"),
+            (r"$b$",            "DCC correlation persistence"),
+            (r"$\rho_t$",       "dynamic conditional correlation (firm vs. market)"),
+        ],
+    ),
+]
+
+
+_MEASURE_CARDS = [
+    _measure_card(
+        title="MES — Marginal Expected Shortfall",
+        formula_latex=(
+            r"$$\mathrm{MES}_i(t) = -\min\!\left(\sigma_f(t)\rho(t)\,k_1 "
+            r"+ \sigma_f(t)\sqrt{1-\rho(t)^2}\,k_2,\; 0\right)$$"
+        ),
+        description=(
+            "Expected daily equity loss of the firm conditional on the "
+            "market being in its worst $\\alpha\\%$ of days. Acharya et al. (2017)."
+        ),
+        params=[
+            (r"$\sigma_f(t)$", "firm conditional volatility (GJR-GARCH)"),
+            (r"$\rho(t)$",     "DCC conditional correlation with the market"),
+            (r"$k_1,\ k_2$",   "kernel-weighted means of standardised market and idiosyncratic residuals"),
+            (r"$\alpha$",      "market tail probability — adjustable in the topbar"),
+        ],
+    ),
+    _measure_card(
+        title="LRMES — Long-Run Marginal Expected Shortfall",
+        formula_latex=(
+            r"$$\beta(t) = \rho(t)\,\frac{\sigma_f(t)}{\sigma_m(t)}, "
+            r"\quad \mathrm{LRMES}(t) = 1 - (1-d)^{\beta(t)}$$"
+        ),
+        description=(
+            "Closed-form expected equity loss over a multi-month horizon "
+            "given a market decline of $d$. $\\alpha$-invariant — driven "
+            "entirely by the DCC-implied conditional beta. Brownlees & Engle (2017)."
+        ),
+        params=[
+            (r"$\beta(t)$",    "DCC-implied conditional market beta"),
+            (r"$\rho(t)$",     "DCC conditional correlation"),
+            (r"$\sigma_f(t)$", "firm conditional volatility"),
+            (r"$\sigma_m(t)$", "market conditional volatility"),
+            (r"$d$",           "market-decline threshold — slider on the SRISK tab (default 40%)"),
+        ],
+    ),
+    _measure_card(
+        title="ΔCoVaR — Delta Conditional Value-at-Risk",
+        formula_latex=(
+            r"$$\Delta\mathrm{CoVaR}_i(t) = b_1\bigl(\mathrm{VaR}_i(t) - "
+            r"\mathrm{Median}_i\bigr), \quad \mathrm{VaR}_i(t) = "
+            r"\sigma_f(t)\cdot c_i$$"
+        ),
+        description=(
+            "How much wider the market's Value-at-Risk becomes when bank "
+            "$i$ shifts from its median state to a distressed state, via "
+            "IRLS quantile regression at $\\alpha$. Adrian & Brunnermeier (2016)."
+        ),
+        params=[
+            (r"$b_0,\ b_1$",          "quantile-regression intercept and slope"),
+            (r"$\sigma_f(t)$",        "firm conditional volatility"),
+            (r"$c_i$",                "$\\alpha$-quantile of $\\sigma_f$-standardised firm returns"),
+            (r"$\mathrm{VaR}_i(t)$",  "time-varying firm Value-at-Risk"),
+            (r"$\mathrm{Median}_i$",  "median of demeaned firm returns (normal-state benchmark)"),
+            (r"$\alpha$",             "tail probability — adjustable in the topbar"),
+        ],
+    ),
+    _measure_card(
+        title="SRISK — Capital Shortfall under Stress",
+        formula_latex=(
+            r"$$\mathrm{SRISK}_i(t) = \max\!\left(0,\; k\,\tilde D(t) - "
+            r"(1-k)(1-\mathrm{LRMES}(t))\,W(t)\right)$$"
+        ),
+        description=(
+            "Expected equity capital shortfall of a bank under a market "
+            "decline of $d$ — the gap between stressed equity and the "
+            "prudential minimum. Brownlees & Engle (2017)."
+        ),
+        params=[
+            (r"$k$",                  "prudential capital ratio — slider on the SRISK tab (default 8%)"),
+            (r"$\tilde D(t)$",        "forward-rolled book liabilities (quarterly step function)"),
+            (r"$W(t)$",               "market capitalisation"),
+            (r"$\mathrm{LRMES}(t)$",  "expected equity loss fraction under stress"),
+            (r"$d$",                  "market-decline threshold — slider on the SRISK tab (default 40%)"),
+        ],
+    ),
+    _measure_card(
+        title="LVG — Quasi-Leverage",
+        formula_latex=(
+            r"$$\mathrm{LVG}(t) = \frac{D(t) + W(t)}{W(t)}$$"
+        ),
+        description=(
+            "Ratio of quasi-total assets (liabilities + equity) to equity. "
+            "Higher LVG signals a thinner equity cushion to absorb tail "
+            "events."
+        ),
+        params=[
+            (r"$D(t)$",          "book liabilities (quarterly filings, forward-filled daily)"),
+            (r"$W(t)$",          "market capitalisation"),
+            (r"$D(t)+W(t)$",     "quasi-total assets"),
+        ],
+    ),
+]
+
+
+# Last cache refresh — read once at module load from the prices parquet
+# mtime. The APScheduler job rewrites these files daily at 06:00 UTC.
+def _cache_refresh_ts() -> str:
+    try:
+        ts = os.path.getmtime("cache/prices.parquet")
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+            "%Y-%m-%d %H:%M UTC")
+    except Exception:
+        return "unknown"
+
+
+_LAST_REFRESH = _cache_refresh_ts()
+
+
+def _section_header(title: str) -> html.Div:
+    """Section title + horizontal rule — used by every Methodology block."""
+    return html.Div([
+        html.H5(title, className="mb-1",
+                style={"fontWeight": "700", "color": TEXT_MAIN,
+                       "fontSize": "1.05rem"}),
+        html.Hr(style={"marginTop": "4px", "marginBottom": "12px",
+                       "borderTopWidth": "2px",
+                       "borderTopColor": ACCENT_BLUE,
+                       "opacity": 0.6}),
+    ], className="mt-3")
 
 
 methodology_layout = dbc.Container([
-    dbc.Row([
-        dbc.Col([
-            html.Div([
-                html.H5("Methodology & References", className="mb-3",
-                        style={"fontWeight": "700"}),
-                html.P(
-                    "All five measures are estimated from the bivariate "
-                    "DCC-GJR-GARCH(1,1,1) model with zero mean. The market index "
-                    f"({MARKET_NAME}) and each firm's daily log return form the "
-                    "two-variable system.",
-                    className="text-muted mb-3",
-                    style={"fontSize": "0.88rem"}),
+    # Intro
+    html.Div([
+        html.H4("Methodology",
+                className="mb-2",
+                style={"fontWeight": "800", "color": TEXT_MAIN}),
+        html.P(
+            "All measures are estimated from a bivariate "
+            "DCC-GJR-GARCH(1,1,1) model with zero mean, where the market "
+            f"index ({MARKET_NAME}) and each firm's daily log return form "
+            "the two-variable system.",
+            className="text-muted mb-0",
+            style={"fontSize": "0.88rem", "lineHeight": "1.5",
+                   "maxWidth": "900px"},
+        ),
+    ], className="mt-3 mb-2"),
 
-                html.Hr(),
-                html.H6("Volatility & correlation", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                _formula_block(
-                    "GJR-GARCH(1,1,1)",
-                    "h_t = ω + αg·ε²_{t-1} + γ·ε²_{t-1}·𝟙{ε_{t-1}<0} + βg·h_{t-1}\n"
-                    "σ_t = √h_t",
-                    description=(
-                        "Models time-varying conditional volatility with an asymmetric "
-                        "leverage effect: negative return shocks amplify future volatility "
-                        "more than positive shocks of equal magnitude. Fitted independently "
-                        "to the market index and each firm's return series (zero-mean assumption)."
-                    ),
-                    variables=[
-                        ("ω",        "long-run variance floor"),
-                        ("αg",       "ARCH effect — sensitivity to past shock size"),
-                        ("γ",        "leverage effect — extra amplification for negative shocks"),
-                        ("βg",       "GARCH persistence of conditional variance"),
-                        ("ε_t = r_t","return innovation (equals return under zero-mean)"),
-                        ("h_t",      "conditional variance"),
-                        ("𝟙{·}",    "indicator: 1 if condition holds, 0 otherwise"),
-                    ],
-                    note="αg and βg are GARCH parameters — distinct from the tail probability α "
-                         "used in MES and ΔCoVaR.",
-                ),
-                _formula_block(
-                    "DCC(1,1) — Dynamic Conditional Correlation",
-                    "Q_t = (1−a−b)·Q̄ + a·ε_{t-1}ε'_{t-1} + b·Q_{t-1}\n"
-                    "ρ_t = Q_t[0,1] / √(Q_t[0,0]·Q_t[1,1])",
-                    description=(
-                        "Tracks the time-varying pairwise correlation between each bank "
-                        "and the market index after standardising for GARCH-fitted volatility. "
-                        "The pseudo-covariance matrix Q_t mean-reverts to its unconditional "
-                        "level Q̄, with the speed governed by the persistence parameter b."
-                    ),
-                    variables=[
-                        ("Q̄",   "unconditional covariance of standardised residuals (full-sample)"),
-                        ("ε_t", "standardised residual vector [r_m/σ_m, r_f/σ_f]"),
-                        ("a",   "DCC shock sensitivity"),
-                        ("b",   "DCC correlation persistence"),
-                        ("ρ_t", "dynamic conditional correlation between firm and market"),
-                    ],
-                    note="(a, b) are estimated by maximising the Gaussian DCC conditional log-likelihood.",
-                ),
+    # ── 1. Data sources ──────────────────────────────────────────────────
+    _section_header("Data sources"),
+    html.Div([
+        html.Ul([
+            html.Li([html.B("Prices & balance sheets: "),
+                     "Yahoo Finance (yfinance)."]),
+            html.Li([html.B("Rates, yields, VIX: "),
+                     "Yahoo Finance (ZQ=F, ^TNX, ^IRX, ^VIX)."]),
+            html.Li([html.B("Credit spread (BAA10YM): "),
+                     "FRED."]),
+        ], className="mb-2", style={"fontSize": "0.85rem",
+                                    "lineHeight": "1.55"}),
+        html.P([
+            html.B("Refresh frequency: "),
+            "Daily at 06:00 UTC.",
+            html.Br(),
+            html.B("Last refresh: "),
+            html.Span(_LAST_REFRESH, style={"fontFamily": "ui-monospace, "
+                                                          "SFMono-Regular, "
+                                                          "Menlo, monospace"}),
+        ], className="text-muted mb-0",
+           style={"fontSize": "0.82rem", "lineHeight": "1.5"}),
+    ], style=_card),
 
-                html.Hr(),
-                html.H6("Systemic risk measures", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                _formula_block(
-                    "MES — Marginal Expected Shortfall",
-                    "z(t)     = √(1 − ρ(t)²)\n"
-                    "MES_i(t) = −min( σ_f(t)·ρ(t)·k₁ + σ_f(t)·z(t)·k₂ ,  0 )",
-                    description=(
-                        "The expected daily equity loss of the firm conditional on the "
-                        "market being in its worst α% of days. Time variation is driven "
-                        "entirely by the DCC-GJR-GARCH outputs — the kernel constants "
-                        "k₁ and k₂ are estimated once from the full sample."
-                    ),
-                    variables=[
-                        ("σ_f(t)", "firm conditional volatility from GJR-GARCH"),
-                        ("ρ(t)",   "DCC conditional correlation with market"),
-                        ("z(t)",   "idiosyncratic volatility weight = √(1−ρ²)"),
-                        ("k₁",     "kernel-weighted conditional mean of standardised market residuals"),
-                        ("k₂",     "kernel-weighted conditional mean of idiosyncratic residuals"),
-                        ("α",      "market tail probability (critical value, adjustable)"),
-                    ],
-                    note="Silverman bandwidth: h = σ_u·(4/3T)^0.2, "
-                         "σ_u = min(std(u), IQR(u)/1.349), u = r_m/σ_m.",
-                ),
-                _formula_block(
-                    "LRMES — Long-Run MES",
-                    "β(t)     = ρ(t) · σ_f(t) / σ_m(t)\n"
-                    "LRMES(t) = 1 − exp( log(1−d) · β(t) )  =  1 − (1−d)^{β(t)}",
-                    description=(
-                        "Approximates the expected equity loss over a multi-month stress "
-                        "horizon if the market falls by d, using a closed-form bivariate "
-                        "normal result that requires no simulation. All time variation "
-                        "enters through the DCC-implied conditional beta β(t)."
-                    ),
-                    variables=[
-                        ("β(t)",   "conditional market beta derived from DCC components"),
-                        ("ρ(t)",   "DCC conditional correlation"),
-                        ("σ_f(t)", "firm conditional volatility"),
-                        ("σ_m(t)", "market conditional volatility"),
-                        ("d",      "market decline threshold (default 40%, adjustable in SRISK tab)"),
-                    ],
-                    note="α-invariant: β(t) depends only on DCC outputs, not on the tail "
-                         "probability α. LRMES and SRISK therefore do not respond to α changes.",
-                ),
-                _formula_block(
-                    "ΔCoVaR — Delta Conditional Value-at-Risk",
-                    "r̃_m = b₀ + b₁·r̃_f   (IRLS quantile regression at α)\n"
-                    "VaR_i(t)    = σ_f(t) · c_i     c_i = Quantileα( r̃_f / σ_f )\n"
-                    "CoVaR_i(t)  = b₀ + b₁ · VaR_i(t)\n"
-                    "ΔCoVaR_i(t) = b₁ · ( VaR_i(t) − Median_i )",
-                    description=(
-                        "Measures by how much the market's Value-at-Risk increases when "
-                        "bank i moves from its median state to a distressed state. "
-                        "IRLS quantile regression links demeaned bank returns to demeaned "
-                        "market returns at the chosen tail probability α."
-                    ),
-                    variables=[
-                        ("r̃_m, r̃_f", "demeaned daily log returns for market and firm"),
-                        ("b₀, b₁",    "quantile regression intercept and slope"),
-                        ("σ_f(t)",    "firm conditional volatility (time-varying VaR scaling)"),
-                        ("c_i",       "α-quantile of σ_f-standardised firm returns (full-sample constant)"),
-                        ("VaR_i(t)",  "time-varying firm Value-at-Risk"),
-                        ("Median_i",  "median of demeaned firm returns (normal-state benchmark)"),
-                        ("α",         "tail probability (critical value, adjustable)"),
-                    ],
-                    note="Precomputed on the full α grid {1%, 2.5%, 5%, 7.5%, 10%}; the active "
-                         "frame is swapped when α is changed. Optional macro state variables "
-                         "(rates, VIX, credit spread) can be included as additional regressors.",
-                ),
-                _formula_block(
-                    "SRISK — Capital Shortfall under Stress",
-                    "SRISK_i(t) = max( 0,  k·D̃(t) − (1−k)·(1−LRMES(t))·W(t) )",
-                    description=(
-                        "The equity capital shortfall of a bank if the market were to fall "
-                        "by d — the amount by which stressed equity would fall short of the "
-                        "prudential minimum. Only undercapitalised institutions (positive "
-                        "SRISK) contribute to aggregate systemic risk."
-                    ),
-                    variables=[
-                        ("k",        "prudential capital ratio (default 8%, adjustable)"),
-                        ("D̃(t)",    "forward-rolled book liabilities (quarterly step function)"),
-                        ("W(t)",     "market capitalisation (equity)"),
-                        ("LRMES(t)", "expected equity loss fraction under market stress"),
-                        ("d",        "market decline threshold (same as in LRMES, adjustable)"),
-                    ],
-                    note="D̃(t) uses a 3-month forward-rolling scheme matching "
-                         "Belluzzo's forward_roll_data.m. Note: D̃ (liabilities) is "
-                         "distinct from d (decline threshold).",
-                ),
-                _formula_block(
-                    "LVG — Quasi-Leverage",
-                    "LVG(t) = ( D(t) + W(t) ) / W(t)",
-                    description=(
-                        "The ratio of quasi-total assets (liabilities plus equity) to equity, "
-                        "measuring how much a firm's equity cushion must absorb in a tail event. "
-                        "A higher LVG indicates greater fragility to adverse shocks."
-                    ),
-                    variables=[
-                        ("D(t)",       "book liabilities (quarterly filings, forward-filled daily)"),
-                        ("W(t)",       "market capitalisation"),
-                        ("D(t)+W(t)",  "quasi-total assets"),
-                    ],
-                    note="Matches the LVG column published by NYU Stern V-Lab.",
-                ),
+    # ── 2. References ────────────────────────────────────────────────────
+    _section_header("References"),
+    html.Div([
+        html.Ol([
+            html.Li([
+                "Acharya, V. V., Pedersen, L. H., Philippon, T., & "
+                "Richardson, M. (2010, 2017). ",
+                html.I("Measuring Systemic Risk. "),
+                "Review of Financial Studies 30(1): 2–47."]),
+            html.Li([
+                "Adrian, T., & Brunnermeier, M. K. (2016). ",
+                html.I("CoVaR. "),
+                "American Economic Review 106(7): 1705–1741."]),
+            html.Li([
+                "Brownlees, C., & Engle, R. F. (2017). ",
+                html.I("SRISK: A Conditional Capital Shortfall Measure "
+                       "of Systemic Risk. "),
+                "Review of Financial Studies 30(1): 48–79."]),
+            html.Li([
+                "Belluzzo, T. (2020). ",
+                html.A("github.com/TommasoBelluzzo/SystemicRisk",
+                       href="https://github.com/TommasoBelluzzo/SystemicRisk",
+                       target="_blank"),
+                " — MATLAB reference implementation."]),
+            html.Li([
+                "Court, B., Gisiger, M., & Mezabrovschi, S. (2025). ",
+                html.I("Systemic Risk Analyzer (focus banks)."),
+                " ZHAW Master's thesis."]),
+        ], className="mb-0", style={"fontSize": "0.85rem",
+                                    "lineHeight": "1.55"}),
+    ], style=_card),
 
-                html.Hr(),
-                html.H6("Worked numeric example", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                html.P(
-                    "Illustrative end-to-end calculation with stylised inputs to "
-                    "show how the formulas combine into a SRISK number. "
-                    "Numbers below are rounded for clarity.",
-                    className="text-muted mb-2",
-                    style={"fontSize": "0.83rem"},
-                ),
-                html.Pre(
-                    "Inputs (illustrative bank, 2020-03-16 — COVID crash):\n"
-                    "  ρ(t)     = 0.72         (DCC correlation with S&P 500)\n"
-                    "  σ_f(t)   = 4.10 % daily (firm GJR-GARCH vol)\n"
-                    "  σ_m(t)   = 3.80 % daily (market GJR-GARCH vol)\n"
-                    "  D̃(t)    = 1,800 bn USD (forward-rolled liabilities)\n"
-                    "  W(t)    =   220 bn USD (market cap)\n"
-                    "  k = 8 %, d = 40 %, α = 5 %\n\n"
-                    "Step 1 — Conditional beta\n"
-                    "  β(t)     = ρ · σ_f / σ_m  =  0.72 · 4.10 / 3.80  ≈  0.777\n\n"
-                    "Step 2 — LRMES (closed form)\n"
-                    "  LRMES(t) = 1 − (1 − 0.40)^0.777  =  1 − 0.60^0.777  ≈  0.327  (32.7 %)\n\n"
-                    "Step 3 — SRISK\n"
-                    "  SRISK(t) = max(0, k·D̃ − (1−k)·(1−LRMES)·W)\n"
-                    "           = max(0, 0.08·1800 − 0.92·(1−0.327)·220)\n"
-                    "           = max(0, 144 − 136.20)\n"
-                    "           ≈ 7.8 bn USD\n\n"
-                    "Interpretation: under a 40 % market decline this bank would face\n"
-                    "an estimated capital shortfall of ≈ 7.8 bn USD relative to the\n"
-                    "8 % prudential threshold.",
-                    style={"backgroundColor": "#f8f9fa",
-                           "padding": "12px 16px", "borderRadius": "4px",
-                           "border": f"1px solid {BORDER}",
-                           "fontSize": "0.82rem", "marginBottom": "8px",
-                           "whiteSpace": "pre-wrap",
-                           "fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace"},
-                ),
-                html.P(
-                    "Try this in the dashboard: select a single bank, set α = 5 %, "
-                    "k = 8 %, d = 40 %, and check the SRISK over time chart around "
-                    "March 2020 — you should see a comparable order of magnitude "
-                    "for the largest US institutions.",
-                    className="text-muted mb-3",
-                    style={"fontSize": "0.78rem", "fontStyle": "italic"},
-                ),
+    # ── 3. Risk measures ─────────────────────────────────────────────────
+    _section_header("Risk measures"),
+    # Sub-section: Volatility & correlation models
+    html.H6("Volatility & correlation models",
+            className="mb-2",
+            style={"fontWeight": "700", "color": TEXT_MAIN,
+                   "fontSize": "0.95rem"}),
+    dbc.Row(_VOL_CORR_CARDS, className="g-3"),
 
-                html.Hr(),
-                html.H6("Data sources", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                html.Ul([
-                    html.Li([html.B("Prices, balance sheets, separate accounts:"),
-                             " Yahoo Finance via yfinance."]),
-                    html.Li([html.B("Rates & yields (Fed Funds, 10Y, 3M, VIX):"),
-                             " Yahoo Finance (ZQ=F, ^TNX, ^IRX, ^VIX)."]),
-                    html.Li([html.B("Credit spread (BAA10YM):"),
-                             " FRED — no yfinance equivalent."]),
-                ], style={"fontSize": "0.85rem", "color": TEXT_MUTED}),
+    # Sub-section: Systemic risk measures
+    html.H6("Systemic risk measures",
+            className="mb-2 mt-3",
+            style={"fontWeight": "700", "color": TEXT_MAIN,
+                   "fontSize": "0.95rem"}),
+    dbc.Row(_MEASURE_CARDS, className="g-3 mb-3"),
 
-                html.Hr(),
-                html.H6("References", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                html.Ol([
-                    html.Li([
-                        "Acharya, V. V., Pedersen, L. H., Philippon, T., & "
-                        "Richardson, M. (2010, 2017). ",
-                        html.I("Measuring Systemic Risk. "),
-                        "Review of Financial Studies 30(1): 2–47."]),
-                    html.Li([
-                        "Adrian, T., & Brunnermeier, M. K. (2016). ",
-                        html.I("CoVaR. "),
-                        "American Economic Review 106(7): 1705–1741."]),
-                    html.Li([
-                        "Brownlees, C., & Engle, R. F. (2017). ",
-                        html.I("SRISK: A Conditional Capital Shortfall Measure of Systemic Risk. "),
-                        "Review of Financial Studies 30(1): 48–79."]),
-                    html.Li([
-                        "Belluzzo, T. (2020). ",
-                        html.A("github.com/TommasoBelluzzo/SystemicRisk",
-                               href="https://github.com/TommasoBelluzzo/SystemicRisk",
-                               target="_blank"),
-                        " — MATLAB reference implementation."]),
-                ], style={"fontSize": "0.85rem"}),
-
-                html.Hr(),
-                html.H6("Parameters", className="mb-2 mt-3",
-                        style={"fontWeight": "700"}),
-                html.Ul([
-                    html.Li(["Prudential capital ratio ", html.B("k = 8%")]),
-                    html.Li(["LRMES decline threshold ", html.B("d = 40% (default)"),
-                             " — adjustable in the SRISK tab"]),
-                    html.Li(["Forward-roll frequency ", html.B("3 months (quarterly filings)")]),
-                    html.Li(["Default critical value ", html.B("α = 5%"),
-                             " — selectable from {1%, 2.5%, 5%, 7.5%, 10%}. ",
-                             "α drives the market-tail quantile used by MES and ΔCoVaR. ",
-                             html.B("LRMES and SRISK are α-invariant"),
-                             " under this closed form — their magnitude is set by the ",
-                             "fixed decline threshold ", html.B("d = 40%"),
-                             " and the DCC components (ρ, σ_f, σ_m), per ",
-                             "Brownlees & Engle (2017) and Belluzzo (2020)."]),
-                    html.Li(["Estimation window: rolling 5 years of daily log returns"]),
-                ], style={"fontSize": "0.85rem", "color": TEXT_MUTED}),
-            ], style=_card),
-        ], xs=12),
-    ]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
 # ── Main layout ───────────────────────────────────────────────────────────────
@@ -1427,7 +1461,7 @@ _loading_bar = html.Div(
 
 app.layout = html.Div([
     header,
-    controls,
+    controls_section,
     dcc.Store(id="refresh-store",      data=0),
     dcc.Store(id="alpha-store",        data=0.05),
     dcc.Store(id="custom-banks-store", data={}),
@@ -1456,6 +1490,28 @@ app.layout = html.Div([
 
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
+
+# ── Filter bar collapse toggle ───────────────────────────────────────────────
+
+@app.callback(
+    Output("filters-collapse", "is_open"),
+    Output("filters-caret",    "style"),
+    Input("btn-toggle-filters", "n_clicks"),
+    State("filters-collapse",   "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_filters(_n_clicks, is_open):
+    new_open = not is_open
+    caret_style = {
+        "display": "inline-block",
+        "transition": "transform 0.15s",
+        "marginRight": "6px",
+        # Rotate ▼ → ▶ when collapsed (90° counter-clockwise so the arrow
+        # points right, signalling the panel can be expanded again).
+        "transform": "rotate(0deg)" if new_open else "rotate(-90deg)",
+    }
+    return new_open, caret_style
+
 
 # ── Time-range presets ─────────────────────────────────────────────────────────
 
@@ -2214,36 +2270,48 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
     lvg_risk,   lvg_tip   = _classify_risk(lvg_df,    "mean",     fmt_fn=_fmt_ratio)
 
     _ACCENT = ACCENT_BLUE
+    # Tooltip text mirrors the measure descriptions on the Methodology tab.
+    _info_mes   = MEASURE_DESCRIPTIONS["mes"]
+    _info_lrmes = MEASURE_DESCRIPTIONS["lrmes"]
+    _info_cov   = MEASURE_DESCRIPTIONS["covar"]
+    _info_srisk = MEASURE_DESCRIPTIONS["srisk"]
+    _info_lvg   = MEASURE_DESCRIPTIONS["lvg"]
+
     kpi_mes  = kpi_card("Avg. MES",
                         _fmt_pct(agg_mes),
                         "Mean 1-day tail loss",
                         _ACCENT,
                         delta_text=mes_badge, delta_direction=mes_dir,
-                        risk_level=mes_risk, risk_tooltip=mes_tip)
+                        risk_level=mes_risk, risk_tooltip=mes_tip,
+                        info_text=_info_mes, info_id="info-icon-overview-mes")
     kpi_lrmes = kpi_card("Avg. LRMES",
                         _fmt_pct(agg_lrmes),
                         "Long-run MES at d-decline scenario",
                         _ACCENT,
                         delta_text=lrmes_badge, delta_direction=lrmes_dir,
-                        risk_level=lrmes_risk, risk_tooltip=lrmes_tip)
+                        risk_level=lrmes_risk, risk_tooltip=lrmes_tip,
+                        info_text=_info_lrmes, info_id="info-icon-overview-lrmes")
     kpi_cov  = kpi_card("Avg. |ΔCoVaR|",
                         _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                         "Mean marginal systemic contribution",
                         _ACCENT,
                         delta_text=cov_badge, delta_direction=cov_dir,
-                        risk_level=cov_risk, risk_tooltip=cov_tip)
+                        risk_level=cov_risk, risk_tooltip=cov_tip,
+                        info_text=_info_cov, info_id="info-icon-overview-covar")
     kpi_srisk = kpi_card("Total SRISK",
                          _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
                          "Aggregate capital shortfall estimate",
                          _ACCENT,
                          delta_text=srisk_badge, delta_direction=srisk_dir,
-                         risk_level=srisk_risk, risk_tooltip=srisk_tip)
+                         risk_level=srisk_risk, risk_tooltip=srisk_tip,
+                         info_text=_info_srisk, info_id="info-icon-overview-srisk")
     kpi_lvg  = kpi_card("Avg. Leverage",
                         _fmt_ratio(agg_lvg),
                         "(Liabilities + Market Cap) / Market Cap",
                         _ACCENT,
                         delta_text=lvg_badge, delta_direction=lvg_dir,
-                        risk_level=lvg_risk, risk_tooltip=lvg_tip)
+                        risk_level=lvg_risk, risk_tooltip=lvg_tip,
+                        info_text=_info_lvg, info_id="info-icon-overview-lvg")
 
     # Overview ranking bars — show only the top 10 banks per measure
     _TOP_N = 10
@@ -2408,19 +2476,25 @@ def update_overview(start, end, tickers, _refresh, _alpha, snap_date):
                              "Mean 1-day tail loss",
                              _ACCENT,
                              delta_text=mes_badge, delta_direction=mes_dir,
-                             risk_level=mes_risk, risk_tooltip=mes_tip)
+                             risk_level=mes_risk, risk_tooltip=mes_tip,
+                             info_text=_info_mes,
+                             info_id="info-icon-start-mes")
     kpi_start_cov = kpi_card("Avg. |ΔCoVaR|",
                              _fmt_pct(abs(agg_covar) if not pd.isna(agg_covar) else float("nan")),
                              "Mean marginal systemic contribution",
                              _ACCENT,
                              delta_text=cov_badge, delta_direction=cov_dir,
-                             risk_level=cov_risk, risk_tooltip=cov_tip)
+                             risk_level=cov_risk, risk_tooltip=cov_tip,
+                             info_text=_info_cov,
+                             info_id="info-icon-start-covar")
     kpi_start_srisk = kpi_card("Total SRISK",
                                _fmt_bn(agg_srisk if agg_srisk > 0 else float("nan")),
                                "Aggregate capital shortfall estimate",
                                _ACCENT,
                                delta_text=srisk_badge, delta_direction=srisk_dir,
-                               risk_level=srisk_risk, risk_tooltip=srisk_tip)
+                               risk_level=srisk_risk, risk_tooltip=srisk_tip,
+                               info_text=_info_srisk,
+                               info_id="info-icon-start-srisk")
 
     return (kpi_mes, kpi_lrmes, kpi_cov, kpi_srisk, kpi_lvg,
             kpi_start_mes, kpi_start_cov, kpi_start_srisk,
