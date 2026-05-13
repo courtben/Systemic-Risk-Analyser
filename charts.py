@@ -392,7 +392,7 @@ def srisk_pie(series: pd.Series, top_n: int = 5) -> go.Figure:
         hovertemplate="%{label}: %{value:.2e} (%{percent})<extra></extra>",
     ))
     fig.update_layout(
-        title=dict(text=f"SRISK Share (%) — Top {top_n} + Other",
+        title=dict(text=f"SRISK Share (%)",
                    font=dict(size=CHART_TITLE_SIZE)),
         height=320,
         **base_layout(),

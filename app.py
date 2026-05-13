@@ -97,7 +97,6 @@ MC_TS    = D.build_market_cap_series(PRICES, BS)
 MEASURES = M.compute_all(RETURNS, MC_TS, LB_DAILY, LBR_DAILY, BS, state_vars=STATE_VARS)
 
 # ── Quasi-leverage = (Book Liabilities + Market Cap) / Market Cap ────────────
-# Matches the "LVG" column on NYU Stern V-Lab.
 def _build_leverage(lb_daily: pd.DataFrame, mc_ts: pd.DataFrame) -> pd.DataFrame:
     common = [c for c in lb_daily.columns if c in mc_ts.columns]
     if not common:
@@ -125,7 +124,7 @@ DCC_RHO = _load_dcc_rho()
 
 # ── α-grid for ΔCoVaR ────────────────────────────────────────────────────────
 # ΔCoVaR uses quantile regression (IRLS) which is too slow to recompute
-# interactively. Precompute at a small grid and snap the slider to nearest.
+# interactively.
 ALPHA_GRID = [0.01, 0.025, 0.05, 0.075, 0.10]
 
 def _nearest_alpha(a: float) -> float:
@@ -285,7 +284,7 @@ header = dbc.Navbar(
                     style={"color": TEXT_MAIN, "fontWeight": "700", "fontSize": "1.05rem"}),
             html.Small(
                 "MES · ΔCoVaR · SRISK  |  "
-                "Acharya et al. (2010/2017) · Adrian & Brunnermeier (2016) · Brownlees & Engle (2017)",
+                "Acharya et al. (2017) · Adrian & Brunnermeier (2016) · Brownlees & Engle (2017)",
                 className="text-muted",
             ),
         ]),
@@ -480,27 +479,21 @@ _TABS_META: list[tuple[str, str, str]] = [
     # (tab_id, label, 1–2 sentence description)
     ("tab-overview",
      "Overview",
-     "At-a-glance health check: five aggregated KPIs with risk indicators "
-     "and 7-day deltas, top-10 ranking bars per measure, and a sortable "
-     "risk-summary table for any snapshot date."),
+     "Overview of current systemic risk levels, "
+     "highlighting the banks with the highest contributions and the largest one-week shifts."),
     ("tab-ts",
      "Time Series",
-     "Daily time series of MES, LRMES, ΔCoVaR, and SRISK per selected bank, "
-     "overlaid with the portfolio aggregate and shaded crisis windows."),
+     "Historical developement of systemic risk measures over time."),
     ("tab-srisk",
      "SRISK",
-     "Stress-test SRISK live by tuning the k (capital ratio) and d "
-     "(market-decline) sliders, then drill into per-bank breakdowns, "
-     "stacked area, and share pie."),
+     "Stress-test SRISK live by tuning the capital ratio and "
+     "market-decline parameters."),
     ("tab-market",
      "Market & Correlation",
-     "Rebased equity prices, daily return distributions, and DCC ρ(t) "
-     "correlation dynamics — the market-level inputs feeding the "
-     "systemic-risk model."),
+     "Performance and correlations of the individual banks compared to the market (S&P 500)."),
     ("tab-methodology",
      "Methodology",
-     "Data sources with refresh schedule, source-paper references, and "
-     "the full formula + parameter card for every model and measure."),
+     "Data sources, references and formulas used to calculate risk measures."),
 ]
 
 
@@ -583,11 +576,8 @@ start_layout = dbc.Container([
                                "color": TEXT_MAIN,
                                "marginBottom": "6px"}),
                 html.P(
-                    "An interactive dashboard for monitoring systemic risk in "
-                    "the U.S. banking sector — built around the four standard "
-                    "academic measures (MES, LRMES, ΔCoVaR, SRISK) computed "
-                    "from a DCC-GJR-GARCH model on daily equity returns and "
-                    "bank balance-sheet data.",
+                    "A data-driven dashboard for exploring systemic risk dynamics in the U.S. banking sector "
+                    "through interactive visualisations, econometric risk models, and established systemic risk indicators (MES, ΔCoVaR, SRISK).",
                     className="mb-0 text-center mx-auto",
                     style={"fontSize": "0.88rem", "lineHeight": "1.45",
                            "color": TEXT_MAIN, "maxWidth": "640px"},
@@ -622,24 +612,24 @@ start_layout = dbc.Container([
         dbc.Col([
             _measure_explainer(
                 "MES — Marginal Expected Shortfall",
-                "Average daily equity loss for the bank when the market is "
-                "in its worst α% of days. Acharya et al. (2017)."),
-            html.Div(id="kpi-start-mes"),
-        ], xs=12, md=4, className="mb-2"),
+                "How much a bank's stock typically loses on a bad day for "
+                "the market. Higher = hit harder by market downturns."),
+            html.Div(id="kpi-start-mes", className="mt-auto"),
+        ], xs=12, md=4, className="mb-2 d-flex flex-column"),
         dbc.Col([
             _measure_explainer(
                 "ΔCoVaR — Conditional VaR contribution",
-                "How much wider market VaR becomes when this bank shifts "
-                "from median to distressed. Adrian & Brunnermeier (2016)."),
-            html.Div(id="kpi-start-covar"),
-        ], xs=12, md=4, className="mb-2"),
+                "How much the market's downside risk grows when this bank "
+                "is in trouble. More negative = larger systemic footprint."),
+            html.Div(id="kpi-start-covar", className="mt-auto"),
+        ], xs=12, md=4, className="mb-2 d-flex flex-column"),
         dbc.Col([
             _measure_explainer(
                 "SRISK — Capital shortfall under stress",
-                "Expected capital shortfall under a d% market decline, "
-                "given current leverage. Brownlees & Engle (2017)."),
-            html.Div(id="kpi-start-srisk"),
-        ], xs=12, md=4, className="mb-2"),
+                "Extra capital needed if the market crashed. "
+                "Positive values = likely needs a rescue."),
+            html.Div(id="kpi-start-srisk", className="mt-auto"),
+        ], xs=12, md=4, className="mb-2 d-flex flex-column"),
     ]),
 
     html.Hr(className="my-2"),
@@ -839,9 +829,9 @@ timeseries_layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             html.P(
-                "Time series of the selected risk measure for each bank. "
-                "Individual traces show bank-level dynamics; the aggregate line reflects the cross-sectional mean. "
-                "Shaded bands mark recognised crisis episodes for contextual reference.",
+                "Daily values of the chosen risk measure for each selected "
+                "bank. Use it to spot when risk has spiked historically "
+                "and which banks moved the most.",
                 className="text-muted mb-1 mt-1",
                 style={"fontSize": "0.78rem"},
             ),
@@ -854,23 +844,82 @@ timeseries_layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             html.Div([
-                html.P([
-                    html.B("MES"), " — expected fractional loss of the bank when the "
-                    f"market ({MARKET_NAME}) falls below its α-th percentile (set above). "
-                    "Higher MES = greater tail sensitivity.",
-                    html.Br(),
-                    html.B("ΔCoVaR"), " — market's VaR when the bank is in stress minus "
-                    "its VaR at its median state (Adrian & Brunnermeier 2016). "
-                    "More negative ΔCoVaR = larger systemic footprint. ",
-                    html.Span("Snapped to nearest α ∈ {1, 2.5, 5, 7.5, 10}%.",
-                              style={"fontStyle": "italic"}),
-                ], className="mb-0 text-muted", style={"fontSize": "0.82rem"}),
+                html.Ul([
+                    html.Li([
+                        html.B("MES"),
+                        " — expected daily loss in a bank's stock when the "
+                        "market is having one of its worst α% of days. "
+                        "Higher MES means the bank gets hit harder when "
+                        "the market falls."]),
+                    html.Li([
+                        html.B("LRMES"),
+                        " — expected drop in a bank's stock if the market "
+                        "falls by d over the medium term — the long-horizon "
+                        "counterpart to MES. Higher LRMES means a larger "
+                        "expected loss under sustained market stress."]),
+                    html.Li([
+                        html.B("ΔCoVaR"),
+                        " — how much the market's downside risk grows when "
+                        "a specific bank moves from normal to distressed. "
+                        "A more negative value means the bank contributes "
+                        "more to system-wide tail risk."]),
+                    html.Li([
+                        html.B("CoVaR"),
+                        " — the market's Value-at-Risk conditional on a "
+                        "specific bank being in a particular state (median "
+                        "or distressed); the building block for ΔCoVaR. "
+                        "More negative means deeper potential market "
+                        "losses conditional on bank stress."]),
+                ], className="mb-0 ps-3 text-muted",
+                   style={"fontSize": "0.82rem", "lineHeight": "1.45"}),
             ], style=_card),
         ], xs=12, className="mb-3"),
     ]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
 srisk_layout = dbc.Container([
+    # ── Tab heading with hover-popover info icon (same style as the
+    # KPI ⓘ on the Start / Overview tabs). Popover body is populated by
+    # populate_srisk_info_popover() at page load.
+    html.Div([
+        html.H5("SRISK",
+                style={"fontWeight": "700", "color": TEXT_MAIN,
+                       "fontSize": "1.05rem", "marginBottom": 0,
+                       "display": "inline-block"}),
+        html.Span(
+            "i",
+            id="srisk-info-icon",
+            className="kpi-info-icon",
+            style={
+                "cursor": "help",
+                "color": ACCENT_BLUE,
+                "border": f"1.5px solid {ACCENT_BLUE}",
+                "borderRadius": "50%",
+                "width": "18px",
+                "height": "18px",
+                "display": "inline-flex",
+                "alignItems": "center",
+                "justifyContent": "center",
+                "fontSize": "0.74rem",
+                "fontStyle": "italic",
+                "fontWeight": "700",
+                "fontFamily": "Georgia, 'Times New Roman', serif",
+                "marginLeft": "8px",
+                "verticalAlign": "middle",
+                "lineHeight": "1",
+                "userSelect": "none",
+                "transition": "background-color 0.15s, color 0.15s",
+            },
+        ),
+        dbc.Popover(
+            id="srisk-info-popover",
+            target="srisk-info-icon",
+            trigger="hover focus",
+            placement="auto",
+            className="kpi-info-popover",
+        ),
+    ], className="mt-3 mb-2"),
+
     # ── Stress parameters (global): k, d sliders + Download ──────────────────
     # k and d affect both the cross-sectional and time-series views below,
     # so they sit at the top of the tab as global what-if controls.
@@ -895,9 +944,9 @@ srisk_layout = dbc.Container([
                 className="mb-0",
             ),
             html.Small(
-                "k is the minimum equity / (equity + debt) ratio a bank is "
-                "assumed to need in stress. SRISK rescales linearly: higher k "
-                "raises the implied shortfall; lower k shrinks it. "
+                "k is the minimum equity to capital ratio a bank is "
+                "assumed to need in stress. Higher k "
+                "raises the implied shortfall, lower k shrinks it. "
                 "Brownlees & Engle (2017) use 8%.",
                 className="text-muted",
                 style={"fontSize": "0.74rem"},
@@ -922,10 +971,8 @@ srisk_layout = dbc.Container([
                 className="mb-0",
             ),
             html.Small(
-                "d is the 1-month market decline used to define LRMES — the "
-                "expected equity loss conditional on the market falling at "
-                "least d over the horizon. LRMES is rescaled analytically: "
-                "LRMES(d) = 1 − (1 − LRMES₀)^(log(1−d)/log(1−0.40)). "
+                "d is the market decline threshold used to define LRMES. Higher d"
+                "increases SRISK, lower d lowers SRISK."
                 "Brownlees & Engle (2017) use 40%.",
                 className="text-muted",
                 style={"fontSize": "0.74rem"},
@@ -968,8 +1015,7 @@ srisk_layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             html.P(
-                "Cross-sectional SRISK for the top 10 banks at the latest date in the selected range. "
-                "Bars show the estimated capital shortfall each institution would face under the chosen stress scenario.",
+                "Cross-sectional SRISK for the 10 largest contibuting banks.",
                 className="text-muted mb-1 mt-1",
                 style={"fontSize": "0.78rem"},
             ),
@@ -978,7 +1024,7 @@ srisk_layout = dbc.Container([
         dbc.Col([
             html.P(
                 "Share of aggregate SRISK across institutions. "
-                "Highlights systemic risk concentration — a small number of banks typically account for the majority.",
+                "Highlights systemic risk concentration.",
                 className="text-muted mb-1 mt-1",
                 style={"fontSize": "0.78rem"},
             ),
@@ -1020,24 +1066,6 @@ srisk_layout = dbc.Container([
             dcc.Graph(id="chart-srisk-ts"),
         ], xs=12, className="mb-3"),
     ]),
-    dbc.Row([
-        dbc.Col([
-            html.Div([
-                html.P([
-                    html.B("Formula: "), "SRISK = max(0, k·D − (1−k)·(1−LRMES)·W)",
-                    html.Br(),
-                    "k = prudential capital ratio (slider above; default 8%) · "
-                    "D = book liabilities · W = market cap · "
-                    "LRMES(t) = 1 − exp(log(1−d) · β(t)), d = 1-month decline "
-                    "threshold (slider above; default 40%), β from DCC-GJR-GARCH.",
-                    html.Br(),
-                    html.Span("Note: SRISK values are in USD.",
-                              className="text-warning",
-                              style={"fontWeight": "600"}),
-                ], className="mb-0 text-muted", style={"fontSize": "0.82rem"}),
-            ], style=_card),
-        ], xs=12, className="mb-3"),
-    ]),
 ], fluid=True, style={"backgroundColor": BG_PAGE})
 
 # ── Market Data + DCC Correlation (combined) tab ─────────────────────────────
@@ -1065,8 +1093,8 @@ market_dcc_layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             html.P(
-                "Three aligned panels: rebased price index (top), time-varying DCC correlation of each bank with the market (middle), "
-                "and the cross-sectional mean DCC correlation (bottom). All panels share a common time axis for direct comparison.",
+                "Rebased prices, each bank's correlation with the market, and the "
+                "cross-bank average correlation. Monitor correlations over time.",
                 className="text-muted mb-1 mt-1",
                 style={"fontSize": "0.78rem"},
             ),
@@ -1074,8 +1102,9 @@ market_dcc_layout = dbc.Container([
         ], xs=12, md=7, className="mb-3"),
         dbc.Col([
             html.P(
-                "Pairwise return correlations between selected banks over the chosen date range. "
-                "Warmer colours signal higher co-movement, which amplifies systemic contagion risk.",
+                "How strongly each pair of banks' daily returns moves "
+                "together. Warmer cells = higher co-movement = more "
+                "contagion risk in a downturn.",
                 className="text-muted mb-1 mt-1",
                 style={"fontSize": "0.78rem"},
             ),
@@ -1086,31 +1115,6 @@ market_dcc_layout = dbc.Container([
 
 
 # ── Methodology tab ──────────────────────────────────────────────────────────
-# Plain-text descriptions of each measure — shared by the Methodology tab
-# (rendered with $\\alpha$, $d$ inside LaTeX) and the small ⓘ tooltips next
-# to every Overview / Start KPI card. Keeping them in one dict guarantees
-# the tooltip mirrors the methodology card exactly.
-MEASURE_DESCRIPTIONS: dict[str, str] = {
-    "mes":
-        "Expected daily equity loss of the firm conditional on the market "
-        "being in its worst α% of days. Acharya et al. (2017).",
-    "lrmes":
-        "Closed-form expected equity loss over a multi-month horizon given "
-        "a market decline of d. α-invariant — driven entirely by the "
-        "DCC-implied conditional beta. Brownlees & Engle (2017).",
-    "covar":
-        "How much wider the market's Value-at-Risk becomes when bank i "
-        "shifts from its median state to a distressed state, via IRLS "
-        "quantile regression at α. Adrian & Brunnermeier (2016).",
-    "srisk":
-        "Expected equity capital shortfall of a bank under a market "
-        "decline of d — the gap between stressed equity and the prudential "
-        "minimum. Brownlees & Engle (2017).",
-    "lvg":
-        "Ratio of quasi-total assets (liabilities + equity) to equity. "
-        "Higher LVG signals a thinner equity cushion to absorb tail events.",
-}
-
 # Each model / measure is rendered as a uniform card:
 #   Title  →  LaTeX formula (MathJax)  →  1–2 sentence description
 #         →  parameter bullets (1 bullet per symbol).
@@ -1121,8 +1125,8 @@ def _methodology_card(title: str, formula_latex: str, description: str,
                       params: list[tuple[str, str]]) -> dbc.Card:
     """Render one methodology card (without dbc.Col wrapper).
 
-    Used both inside the Methodology tab's grid (wrapped in dbc.Col) and as
-    the body of the hover-popovers attached to every KPI's ⓘ icon.
+    Used inside the Methodology tab's grid (wrapped in dbc.Col), as the
+    body of every KPI hover-popover, and inline at the top of the SRISK tab.
     """
     params_md = "\n".join(f"- **{sym}** &mdash; {meaning}"
                           for sym, meaning in params)
@@ -1132,10 +1136,6 @@ def _methodology_card(title: str, formula_latex: str, description: str,
                     style={"fontWeight": "700",
                            "color": TEXT_MAIN,
                            "fontSize": "0.95rem"}),
-            # LaTeX formula block — centered, light grey panel. Allow
-            # horizontal scroll inside the panel as a safety net for the
-            # widest formulas (notably MES) so they never overflow the
-            # surrounding popover / card.
             html.Div(
                 dcc.Markdown(formula_latex, mathjax=True,
                              className="mb-0 methodology-formula",
@@ -1181,9 +1181,7 @@ def _measure_card(title: str, formula_latex: str, description: str,
     )
 
 
-# Single source of truth for every methodology card. The methodology grid
-# wraps each entry in a dbc.Col; the KPI hover-popovers reuse the same
-# data via a fresh _methodology_card() call per render.
+# Single source of truth for every methodology card.
 _METHODOLOGY_DATA: dict[str, dict] = {
     "gjr_garch": dict(
         title="GJR-GARCH(1,1,1) — conditional volatility",
@@ -1193,10 +1191,10 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"+ \beta_g\,h_{t-1}, \quad \sigma_t = \sqrt{h_t}$$"
         ),
         description=(
-            "Time-varying conditional volatility with an asymmetric leverage "
-            "effect — negative return shocks amplify future volatility more "
-            "than positive shocks of equal size. Fitted separately to the "
-            "market index and each firm's return series."
+            "Estimates a bank's day-to-day stock volatility, giving extra "
+            "weight to negative shocks since losses enlarge future swings "
+            "more than equal-sized gains. Higher conditional volatility "
+            "means the stock is expected to swing more sharply that day."
         ),
         params=[
             (r"$\omega$",                  "long-run variance floor"),
@@ -1215,9 +1213,10 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"\rho_t = \frac{Q_t^{(1,2)}}{\sqrt{Q_t^{(1,1)}\,Q_t^{(2,2)}}}$$"
         ),
         description=(
-            "Tracks the time-varying pairwise correlation between each bank "
-            "and the market index after standardising for GARCH-fitted "
-            "volatility, mean-reverting to its unconditional level $\\bar Q$."
+            "Tracks how closely each bank's daily returns move with the "
+            "market over time, letting the correlation drift and slowly "
+            "revert to its long-run average. Higher correlation means the "
+            "bank is moving more in lockstep with the market."
         ),
         params=[
             (r"$\bar Q$",       "unconditional covariance of standardised residuals"),
@@ -1234,14 +1233,15 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"+ \sigma_f(t)\sqrt{1-\rho(t)^2}\,k_2,\; 0\right)$$"
         ),
         description=(
-            "Expected daily equity loss of the firm conditional on the "
-            "market being in its worst $\\alpha\\%$ of days. Acharya et al. (2017)."
+            "Expected daily loss in a bank's stock when the market is "
+            "having one of its worst α% of days. Higher MES means the "
+            "bank gets hit harder when the market falls."
         ),
         params=[
             (r"$\sigma_f(t)$", "firm conditional volatility (GJR-GARCH)"),
             (r"$\rho(t)$",     "DCC conditional correlation with the market"),
             (r"$k_1,\ k_2$",   "kernel-weighted means of standardised market and idiosyncratic residuals"),
-            (r"$\alpha$",      "market tail probability — adjustable in the topbar"),
+            (r"$\alpha$",      "market tail probability"),
         ],
     ),
     "lrmes": dict(
@@ -1251,16 +1251,17 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"\quad \mathrm{LRMES}(t) = 1 - (1-d)^{\beta(t)}$$"
         ),
         description=(
-            "Closed-form expected equity loss over a multi-month horizon "
-            "given a market decline of $d$. $\\alpha$-invariant — driven "
-            "entirely by the DCC-implied conditional beta. Brownlees & Engle (2017)."
+            "Expected drop in a bank's stock if the market falls by d "
+            "over the medium term — the long-horizon counterpart to MES. "
+            "Higher LRMES means a larger expected loss under sustained "
+            "market stress."
         ),
         params=[
             (r"$\beta(t)$",    "DCC-implied conditional market beta"),
             (r"$\rho(t)$",     "DCC conditional correlation"),
             (r"$\sigma_f(t)$", "firm conditional volatility"),
             (r"$\sigma_m(t)$", "market conditional volatility"),
-            (r"$d$",           "market-decline threshold — slider on the SRISK tab (default 40%)"),
+            (r"$d$",           "market-decline threshold"),
         ],
     ),
     "covar": dict(
@@ -1271,9 +1272,10 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"\sigma_f(t)\cdot c_i$$"
         ),
         description=(
-            "How much wider the market's Value-at-Risk becomes when bank "
-            "$i$ shifts from its median state to a distressed state, via "
-            "IRLS quantile regression at $\\alpha$. Adrian & Brunnermeier (2016)."
+            "Measures how much the market's downside risk grows when a "
+            "specific bank moves from normal to distressed. A more "
+            "negative value means the bank contributes more to system-wide "
+            "tail risk."
         ),
         params=[
             (r"$b_0,\ b_1$",          "quantile-regression intercept and slope"),
@@ -1291,16 +1293,16 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"(1-k)(1-\mathrm{LRMES}(t))\,W(t)\right)$$"
         ),
         description=(
-            "Expected equity capital shortfall of a bank under a market "
-            "decline of $d$ — the gap between stressed equity and the "
-            "prudential minimum. Brownlees & Engle (2017)."
+            "Extra capital a bank would need to stay above its required "
+            "cushion if the market crashed by d. Positive SRISK means the "
+            "bank would likely need a bailout in a severe downturn."
         ),
         params=[
-            (r"$k$",                  "prudential capital ratio — slider on the SRISK tab (default 8%)"),
+            (r"$k$",                  "prudential capital ratio"),
             (r"$\tilde D(t)$",        "forward-rolled book liabilities (quarterly step function)"),
             (r"$W(t)$",               "market capitalisation"),
             (r"$\mathrm{LRMES}(t)$",  "expected equity loss fraction under stress"),
-            (r"$d$",                  "market-decline threshold — slider on the SRISK tab (default 40%)"),
+            (r"$d$",                  "market-decline threshold"),
         ],
     ),
     "lvg": dict(
@@ -1309,9 +1311,9 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             r"$$\mathrm{LVG}(t) = \frac{D(t) + W(t)}{W(t)}$$"
         ),
         description=(
-            "Ratio of quasi-total assets (liabilities + equity) to equity. "
-            "Higher LVG signals a thinner equity cushion to absorb tail "
-            "events."
+            "A simple leverage ratio — total assets (liabilities + equity) "
+            "divided by equity. Higher LVG means a thinner equity cushion "
+            "against losses."
         ),
         params=[
             (r"$D(t)$",          "book liabilities (quarterly filings, forward-filled daily)"),
@@ -1432,8 +1434,7 @@ methodology_layout = dbc.Container([
     html.Div([
         html.Ol([
             html.Li([
-                "Acharya, V. V., Pedersen, L. H., Philippon, T., & "
-                "Richardson, M. (2010, 2017). ",
+                "Acharya, V. V., Pedersen, L. H., Philippon, T., & Richardson, M. (2017). ",
                 html.I("Measuring Systemic Risk. "),
                 "Review of Financial Studies 30(1): 2–47."]),
             html.Li([
@@ -1543,6 +1544,22 @@ def toggle_filters(_n_clicks, is_open):
         "transform": "rotate(0deg)" if new_open else "rotate(-90deg)",
     }
     return new_open, caret_style
+
+
+# ── SRISK methodology popover (populated once on page load) ────────────────
+# The popover body is the same methodology card shown on hover from every
+# KPI's ⓘ icon. It's built lazily here because _methodology_card_for /
+# _METHODOLOGY_DATA are defined further down the file, after srisk_layout.
+
+@app.callback(
+    Output("srisk-info-popover", "children"),
+    Input("main-tabs",           "active_tab"),
+)
+def populate_srisk_info_popover(_active_tab):
+    return dbc.PopoverBody(
+        _methodology_card_for("srisk"),
+        style={"padding": 0, "backgroundColor": "transparent"},
+    )
 
 
 # ── Time-range presets ─────────────────────────────────────────────────────────
