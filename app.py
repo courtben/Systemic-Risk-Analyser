@@ -1264,6 +1264,29 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             (r"$d$",           "market-decline threshold"),
         ],
     ),
+    "covar_level": dict(
+        title="CoVaR — Conditional Value-at-Risk (level)",
+        formula_latex=(
+            r"$$\mathrm{CoVaR}_i(t) = b_0 + b_1\cdot\mathrm{VaR}_i(t) "
+            r"+ \gamma'\,\mathbf{M}_{t-1}, "
+            r"\quad \mathrm{VaR}_i(t) = \sigma_f(t)\cdot c_i$$"
+        ),
+        description=(
+            "The market's Value-at-Risk conditional on a specific bank "
+            "being in a particular state (median or distressed), with "
+            "lagged macro state controls. More negative means deeper "
+            "potential market losses conditional on bank stress."
+        ),
+        params=[
+            (r"$b_0,\ b_1$",                "quantile-regression intercept and slope at level α"),
+            (r"$\gamma$",                   "coefficient vector on the lagged macro state variables"),
+            (r"$\mathbf{M}_{t-1}$",         "state vector: VIX, 10Y yield, 3M T-bill, Fed Funds, BAA−10Y credit spread (lagged 1 day)"),
+            (r"$\sigma_f(t)$",              "firm conditional volatility (GJR-GARCH)"),
+            (r"$c_i$",                      "$\\alpha$-quantile of $\\sigma_f$-standardised firm returns"),
+            (r"$\mathrm{VaR}_i(t)$",        "time-varying firm Value-at-Risk"),
+            (r"$\alpha$",                   "tail probability — adjustable in the topbar"),
+        ],
+    ),
     "covar": dict(
         title="ΔCoVaR — Delta Conditional Value-at-Risk",
         formula_latex=(
@@ -1278,7 +1301,7 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "tail risk."
         ),
         params=[
-            (r"$b_0,\ b_1$",          "quantile-regression intercept and slope"),
+            (r"$b_1$",                "quantile-regression slope at level α"),
             (r"$\sigma_f(t)$",        "firm conditional volatility"),
             (r"$c_i$",                "$\\alpha$-quantile of $\\sigma_f$-standardised firm returns"),
             (r"$\mathrm{VaR}_i(t)$",  "time-varying firm Value-at-Risk"),
@@ -1334,7 +1357,9 @@ _VOL_CORR_CARDS = [_measure_card(**_METHODOLOGY_DATA[k])
                    for k in ("gjr_garch", "dcc")]
 
 _MEASURE_CARDS = [_measure_card(**_METHODOLOGY_DATA[k])
-                  for k in ("mes", "lrmes", "covar", "srisk", "lvg")]
+                  for k in ("mes", "lrmes",
+                            "covar_level", "covar",
+                            "srisk", "lvg")]
 
 
 # Per-source cache age — read once at module load from each cache file's
