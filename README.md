@@ -1,30 +1,42 @@
 # Systemic Risk Analyser
 
-An interactive Dash dashboard for monitoring systemic risk in the U.S.
-banking sector. The four standard academic measures — **MES**, **LRMES**,
-**ΔCoVaR**, and **SRISK** — are computed from daily equity returns and
-bank balance-sheet data using a DCC-GJR-GARCH model fit to each
-bank-vs-market pair, then surfaced through five tabs (Start, Overview,
-Time Series, SRISK, Market & Correlation, Methodology).
+A data-driven dashboard for exploring systemic risk dynamics in the U.S. banking sector through interactive visualisations, econometric risk models, and established systemic risk indicators (MES, ΔCoVaR, SRISK).
+
 
 ## Features
 
-- **Risk indicators** — Low / Medium / High pill next to every aggregated
-  KPI, derived from the rolling 500-observation percentile of the daily
-  aggregate (`<70%` Low · `70–90%` Medium · `≥90%` High).
-- **Live KPIs** — MES, LRMES, |ΔCoVaR|, total SRISK, and average leverage
-  with 7-day delta badges.
-- **Per-bank rankings** — top-10 ranking bars and 7-day shift charts on
-  the Overview tab.
-- **SRISK scenario tool** — `k` (capital ratio) and `d` (market-decline)
-  sliders recompute SRISK live; per-bank breakdown, stacked area, and
-  share pie.
-- **Market & correlation** — rebased prices, return distributions, and
-  DCC ρ(t) dynamics with crisis-window overlays.
-- **Snapshot date** — pick any historical day to recompute the Overview
-  risk-summary table.
-- **Daily auto-refresh** — APScheduler job re-fetches prices and
-  re-estimates the model at 06:00 UTC each day.
+The dashboard features six tabs, allowing the analysis of systemic risk measurs over different dimensions.
+
+- **Start** — Accessible entry point before engaging with the analytical tabs.
+- **Overview** — Analytical entry point of the dashboard, presenting a real-time snapshot of systemic risk conditions across the full bank sample.
+- **Time Series** — Dynamic of view of systemic risk measures over the full sample period.
+- **SRISK** — Dedicated environment for capital shortfall analysis under customisable stress scenar-ios.
+- **Market and Correlation** — Multi-panel view of price performance, dynamic correlations, and pairwise return co-movement across the full bank sample.
+- **Methodology** — Built-in reference guide, consolidating all technical documentation in a single accessible location
+
+## Local Setup
+
+Requires Python 3.10.
+
+```bash
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# Linux/macOS
+source .venv/bin/activate
+
+pip install -r requirements.txt
+python app.py
+```
+
+Open http://localhost:8050 in your browser.
+
+The initial cold start loads the parquet snapshots stored in cache/,
+preventing the model from being re-estimated.
+
+Delete the cache/ directory to force a full re-estimation.
 
 ## Project layout
 
@@ -44,46 +56,12 @@ Time Series, SRISK, Market & Correlation, Methodology).
 └── README.md
 ```
 
-## Running locally
+## Data
+Prices & balance sheets: Yahoo Finance (yfinance).
 
-Requires Python 3.10.
+Rates, yields, VIX: Yahoo Finance (ZQ=F, ^TNX, ^IRX, ^VIX).
 
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate    Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
-# open http://localhost:8050
-```
-
-The first cold start uses the parquet snapshots in `cache/` so the model
-fit isn't repeated. Delete the `cache/` directory to force a full
-re-estimation (≈ 10–20 minutes on a laptop).
-
-## Deploying to Render
-
-The repo ships a `render.yaml` blueprint:
-
-1. Push the repo to GitHub (with `cache/` committed).
-2. On Render: **New → Blueprint** → select the repo.
-3. Render reads `render.yaml`, builds with `pip install -r requirements.txt`,
-   and starts `gunicorn app:server --workers=1 --threads=4 --timeout 120`.
-
-Single worker is intentional — the in-process APScheduler must run in
-exactly one Python process to avoid concurrent daily refreshes.
-
-## Methodology summary
-
-| Measure | Formula | Source |
-|---|---|---|
-| **MES** | `E[r_i \| r_m ≤ VaR_α]` (one-day) | Acharya, Pedersen, Philippon & Richardson (2010, 2017) |
-| **LRMES** | `1 − exp(log(1−d) · β_GARCH)` (closed-form approx.) | Brownlees & Engle (2017) |
-| **ΔCoVaR** | `CoVaR(distress) − CoVaR(median)` via quantile regression | Adrian & Brunnermeier (2016) |
-| **SRISK** | `max(0, k · (D + (1−LRMES)·MV) − (1−LRMES)·MV)` | Brownlees & Engle (2017) |
-
-Defaults: `α = 5%`, `k = 8%`, `d = 40%`, rolling 5-year estimation
-window. `α` is exposed in the topbar; `k` and `d` are sliders on the
-SRISK tab.
+Credit spread (BAA10YM): FRED.
 
 ## Stack
 
@@ -97,5 +75,4 @@ SRISK tab.
 
 ## License / disclaimer
 
-Educational and research tool — **not investment advice**. Data sourced
-from Yahoo Finance and public bank filings.
+Educational and research tool — **not investment advice**.
