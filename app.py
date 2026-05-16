@@ -1186,31 +1186,33 @@ _METHODOLOGY_DATA: dict[str, dict] = {
     "gjr_garch": dict(
         title="GJR-GARCH(1,1,1) — conditional volatility",
         formula_latex=(
-            r"$$h_t = \omega + \alpha_g\,\varepsilon_{t-1}^2 "
-            r"+ \gamma\,\varepsilon_{t-1}^2\,\mathbb{1}_{\{\varepsilon_{t-1}<0\}} "
-            r"+ \beta_g\,h_{t-1}, \quad \sigma_t = \sqrt{h_t}$$"
+            r"$$h_i(t) = \omega + \alpha_g\,\varepsilon_i(t-1)^2 "
+            r"+ \gamma\,\varepsilon_i(t-1)^2\,\mathbb{1}_{\{\varepsilon_i(t-1)<0\}} "
+            r"+ \beta_g\,h_i(t-1), \quad \sigma_i(t) = \sqrt{h_i(t)}$$"
         ),
         description=(
             "Estimates a bank's day-to-day stock volatility, giving extra "
             "weight to negative shocks since losses enlarge future swings "
             "more than equal-sized gains. Higher conditional volatility "
-            "means the stock is expected to swing more sharply that day."
+            "means the stock is expected to swing more sharply that day. "
+            "An analogous independent fit produces $\\sigma_m(t)$ for the "
+            "market."
         ),
         params=[
-            (r"$\omega$",                  "long-run variance floor"),
-            (r"$\alpha_g$",                "ARCH effect — sensitivity to past shock size"),
-            (r"$\gamma$",                  "leverage effect — extra amplification for negative shocks"),
-            (r"$\beta_g$",                 "GARCH persistence of conditional variance"),
-            (r"$\varepsilon_t$",           "return innovation (equals $r_t$ under the zero-mean assumption)"),
-            (r"$h_t,\ \sigma_t$",          "conditional variance and volatility"),
+            (r"$\omega$",                       "long-run variance floor"),
+            (r"$\alpha_g$",                     "ARCH effect — sensitivity to past shock size"),
+            (r"$\gamma$",                       "leverage effect — extra amplification for negative shocks"),
+            (r"$\beta_g$",                      "GARCH persistence of conditional variance"),
+            (r"$\varepsilon_i(t)$",             "bank $i$'s return innovation (equals $r_i(t)$ under the zero-mean assumption)"),
+            (r"$h_i(t),\ \sigma_i(t)$",         "bank $i$'s conditional variance and volatility"),
         ],
     ),
     "dcc": dict(
         title="DCC(1,1) — dynamic conditional correlation",
         formula_latex=(
-            r"$$Q_t = (1-a-b)\bar Q + a\,\varepsilon_{t-1}\varepsilon_{t-1}^{\top} "
-            r"+ b\,Q_{t-1}, \quad "
-            r"\rho_t = \frac{Q_t^{(1,2)}}{\sqrt{Q_t^{(1,1)}\,Q_t^{(2,2)}}}$$"
+            r"$$Q_i(t) = (1-a-b)\bar Q_i + a\,\varepsilon_i(t-1)\varepsilon_i(t-1)^{\top} "
+            r"+ b\,Q_i(t-1), \quad "
+            r"\rho_i(t) = \frac{Q_i(t)^{(1,2)}}{\sqrt{Q_i(t)^{(1,1)}\,Q_i(t)^{(2,2)}}}$$"
         ),
         description=(
             "Tracks how closely each bank's daily returns move with the "
@@ -1219,18 +1221,18 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "bank is moving more in lockstep with the market."
         ),
         params=[
-            (r"$\bar Q$",       "unconditional covariance of standardised residuals"),
-            (r"$\varepsilon_t$","standardised residual vector $[r_m/\\sigma_m,\\ r_f/\\sigma_f]$"),
-            (r"$a$",            "DCC shock sensitivity"),
-            (r"$b$",            "DCC correlation persistence"),
-            (r"$\rho_t$",       "dynamic conditional correlation (firm vs. market)"),
+            (r"$\bar Q_i$",         "unconditional covariance of standardised residuals for bank $i$"),
+            (r"$\varepsilon_i(t)$", "standardised residual vector $[r_m(t)/\\sigma_m(t),\\ r_i(t)/\\sigma_i(t)]^{\\top}$"),
+            (r"$a$",                "DCC shock sensitivity"),
+            (r"$b$",                "DCC correlation persistence"),
+            (r"$\rho_i(t)$",        "dynamic conditional correlation between bank $i$ and the market"),
         ],
     ),
     "mes": dict(
         title="MES — Marginal Expected Shortfall",
         formula_latex=(
-            r"$$\mathrm{MES}_i(t) = -\min\!\left(\sigma_f(t)\rho(t)\,k_1 "
-            r"+ \sigma_f(t)\sqrt{1-\rho(t)^2}\,k_2,\; 0\right)$$"
+            r"$$\mathrm{MES}_i(t) = -\min\!\left(\sigma_i(t)\,\rho_i(t)\,k_{1,i} "
+            r"+ \sigma_i(t)\sqrt{1-\rho_i(t)^2}\,k_{2,i},\; 0\right)$$"
         ),
         description=(
             "Expected daily loss in a bank's stock when the market is "
@@ -1238,17 +1240,17 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "bank gets hit harder when the market falls."
         ),
         params=[
-            (r"$\sigma_f(t)$", "firm conditional volatility (GJR-GARCH)"),
-            (r"$\rho(t)$",     "DCC conditional correlation with the market"),
-            (r"$k_1,\ k_2$",   "kernel-weighted means of standardised market and idiosyncratic residuals"),
-            (r"$\alpha$",      "market tail probability"),
+            (r"$\sigma_i(t)$",      "bank $i$'s conditional volatility (GJR-GARCH)"),
+            (r"$\rho_i(t)$",        "DCC conditional correlation between bank $i$ and the market"),
+            (r"$k_{1,i},\ k_{2,i}$","kernel-weighted means of standardised market and idiosyncratic residuals for bank $i$"),
+            (r"$\alpha$",           "market tail probability"),
         ],
     ),
     "lrmes": dict(
         title="LRMES — Long-Run Marginal Expected Shortfall",
         formula_latex=(
-            r"$$\beta(t) = \rho(t)\,\frac{\sigma_f(t)}{\sigma_m(t)}, "
-            r"\quad \mathrm{LRMES}(t) = 1 - (1-d)^{\beta(t)}$$"
+            r"$$\beta_i(t) = \rho_i(t)\,\frac{\sigma_i(t)}{\sigma_m(t)}, "
+            r"\quad \mathrm{LRMES}_i(t) = 1 - (1-d)^{\beta_i(t)}$$"
         ),
         description=(
             "Expected drop in a bank's stock if the market falls by d "
@@ -1257,19 +1259,19 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "market stress."
         ),
         params=[
-            (r"$\beta(t)$",    "DCC-implied conditional market beta"),
-            (r"$\rho(t)$",     "DCC conditional correlation"),
-            (r"$\sigma_f(t)$", "firm conditional volatility"),
-            (r"$\sigma_m(t)$", "market conditional volatility"),
-            (r"$d$",           "market-decline threshold"),
+            (r"$\beta_i(t)$",       "DCC-implied conditional market beta for bank $i$"),
+            (r"$\rho_i(t)$",        "DCC conditional correlation between bank $i$ and the market"),
+            (r"$\sigma_i(t)$",      "bank $i$'s conditional volatility"),
+            (r"$\sigma_m(t)$",      "market conditional volatility"),
+            (r"$d$",                "market-decline threshold"),
         ],
     ),
     "covar_level": dict(
         title="CoVaR — Conditional Value-at-Risk (level)",
         formula_latex=(
-            r"$$\mathrm{CoVaR}_i(t) = b_0 + b_1\cdot\mathrm{VaR}_i(t) "
-            r"+ \gamma'\,\mathbf{M}_{t-1}, "
-            r"\quad \mathrm{VaR}_i(t) = \sigma_f(t)\cdot c_i$$"
+            r"$$\mathrm{CoVaR}_i(t) = b_{0,i} + b_{1,i}\cdot\mathrm{VaR}_i(t) "
+            r"+ \gamma_i'\,\mathbf{M}(t-1), "
+            r"\quad \mathrm{VaR}_i(t) = \sigma_i(t)\cdot c_i$$"
         ),
         description=(
             "The market's Value-at-Risk conditional on a specific bank "
@@ -1278,21 +1280,21 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "potential market losses conditional on bank stress."
         ),
         params=[
-            (r"$b_0,\ b_1$",                "quantile-regression intercept and slope at level α"),
-            (r"$\gamma$",                   "coefficient vector on the lagged macro state variables"),
-            (r"$\mathbf{M}_{t-1}$",         "state vector: VIX, 10Y yield, 3M T-bill, Fed Funds, BAA−10Y credit spread (lagged 1 day)"),
-            (r"$\sigma_f(t)$",              "firm conditional volatility (GJR-GARCH)"),
-            (r"$c_i$",                      "$\\alpha$-quantile of $\\sigma_f$-standardised firm returns"),
-            (r"$\mathrm{VaR}_i(t)$",        "time-varying firm Value-at-Risk"),
+            (r"$b_{0,i},\ b_{1,i}$",        "quantile-regression intercept and slope for bank $i$ at level α"),
+            (r"$\gamma_i$",                 "coefficient vector on the lagged macro state variables for bank $i$"),
+            (r"$\mathbf{M}(t-1)$",          "state vector: VIX, 10Y yield, 3M T-bill, Fed Funds, BAA−10Y credit spread (lagged 1 day)"),
+            (r"$\sigma_i(t)$",              "bank $i$'s conditional volatility (GJR-GARCH)"),
+            (r"$c_i$",                      "$\\alpha$-quantile of $\\sigma_i(t)$-standardised returns of bank $i$"),
+            (r"$\mathrm{VaR}_i(t)$",        "time-varying Value-at-Risk of bank $i$"),
             (r"$\alpha$",                   "tail probability — adjustable in the topbar"),
         ],
     ),
     "covar": dict(
         title="ΔCoVaR — Delta Conditional Value-at-Risk",
         formula_latex=(
-            r"$$\Delta\mathrm{CoVaR}_i(t) = b_1\bigl(\mathrm{VaR}_i(t) - "
+            r"$$\Delta\mathrm{CoVaR}_i(t) = b_{1,i}\bigl(\mathrm{VaR}_i(t) - "
             r"\mathrm{Median}_i\bigr), \quad \mathrm{VaR}_i(t) = "
-            r"\sigma_f(t)\cdot c_i$$"
+            r"\sigma_i(t)\cdot c_i$$"
         ),
         description=(
             "Measures how much the market's downside risk grows when a "
@@ -1301,19 +1303,19 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "tail risk."
         ),
         params=[
-            (r"$b_1$",                "quantile-regression slope at level α"),
-            (r"$\sigma_f(t)$",        "firm conditional volatility"),
-            (r"$c_i$",                "$\\alpha$-quantile of $\\sigma_f$-standardised firm returns"),
-            (r"$\mathrm{VaR}_i(t)$",  "time-varying firm Value-at-Risk"),
-            (r"$\mathrm{Median}_i$",  "median of demeaned firm returns (normal-state benchmark)"),
+            (r"$b_{1,i}$",            "quantile-regression slope for bank $i$ at level α"),
+            (r"$\sigma_i(t)$",        "bank $i$'s conditional volatility"),
+            (r"$c_i$",                "$\\alpha$-quantile of $\\sigma_i(t)$-standardised returns of bank $i$"),
+            (r"$\mathrm{VaR}_i(t)$",  "time-varying Value-at-Risk of bank $i$"),
+            (r"$\mathrm{Median}_i$",  "median of demeaned returns of bank $i$ (normal-state benchmark)"),
             (r"$\alpha$",             "tail probability — adjustable in the topbar"),
         ],
     ),
     "srisk": dict(
         title="SRISK — Capital Shortfall under Stress",
         formula_latex=(
-            r"$$\mathrm{SRISK}_i(t) = \max\!\left(0,\; k\,\tilde D(t) - "
-            r"(1-k)(1-\mathrm{LRMES}(t))\,W(t)\right)$$"
+            r"$$\mathrm{SRISK}_i(t) = \max\!\left(0,\; k\,\tilde D_i(t) - "
+            r"(1-k)(1-\mathrm{LRMES}_i(t))\,W_i(t)\right)$$"
         ),
         description=(
             "Extra capital a bank would need to stay above its required "
@@ -1321,17 +1323,17 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "bank would likely need a bailout in a severe downturn."
         ),
         params=[
-            (r"$k$",                  "prudential capital ratio"),
-            (r"$\tilde D(t)$",        "forward-rolled book liabilities (quarterly step function)"),
-            (r"$W(t)$",               "market capitalisation"),
-            (r"$\mathrm{LRMES}(t)$",  "expected equity loss fraction under stress"),
-            (r"$d$",                  "market-decline threshold"),
+            (r"$k$",                       "prudential capital ratio"),
+            (r"$\tilde D_i(t)$",           "bank $i$'s forward-rolled book liabilities (quarterly step function)"),
+            (r"$W_i(t)$",                  "bank $i$'s market capitalisation"),
+            (r"$\mathrm{LRMES}_i(t)$",     "expected equity loss fraction for bank $i$ under stress"),
+            (r"$d$",                       "market-decline threshold"),
         ],
     ),
     "lvg": dict(
         title="LVG — Quasi-Leverage",
         formula_latex=(
-            r"$$\mathrm{LVG}(t) = \frac{D(t) + W(t)}{W(t)}$$"
+            r"$$\mathrm{LVG}_i(t) = \frac{D_i(t) + W_i(t)}{W_i(t)}$$"
         ),
         description=(
             "A simple leverage ratio — total assets (liabilities + equity) "
@@ -1339,9 +1341,9 @@ _METHODOLOGY_DATA: dict[str, dict] = {
             "against losses."
         ),
         params=[
-            (r"$D(t)$",          "book liabilities (quarterly filings, forward-filled daily)"),
-            (r"$W(t)$",          "market capitalisation"),
-            (r"$D(t)+W(t)$",     "quasi-total assets"),
+            (r"$D_i(t)$",            "bank $i$'s book liabilities (quarterly filings, forward-filled daily)"),
+            (r"$W_i(t)$",            "bank $i$'s market capitalisation"),
+            (r"$D_i(t)+W_i(t)$",     "bank $i$'s quasi-total assets"),
         ],
     ),
 }
