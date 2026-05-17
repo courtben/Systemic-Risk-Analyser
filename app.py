@@ -670,22 +670,6 @@ start_layout = dbc.Container([
               "rowGap": "6px",
               "marginTop": "4px"}),
 
-    # ── Data scope footer ──────────────────────────────────────────────────
-    html.Div(
-        html.Small([
-            html.B("Scope: "),
-            f"{len(D.ALL_BANKS)} U.S. banks · daily data "
-            f"{DATE_MIN.isoformat()} → {DATE_MAX.isoformat()} · benchmark "
-            f"{D.MARKET_NAME}. ",
-            html.Span(
-                "Educational / research tool — not investment advice.",
-                className="text-muted",
-            ),
-        ], className="text-muted",
-           style={"fontSize": "0.74rem"}),
-        className="text-center mt-1 mb-2",
-    ),
-
 ], fluid=True, className="px-3")
 
 
@@ -1545,6 +1529,18 @@ app.layout = html.Div([
         ], id="main-tabs", active_tab="tab-start",
            style={"paddingLeft": "1rem", "backgroundColor": "#f8f9fa",
                   "borderBottom": f"1px solid {BORDER}"}),
+    ),
+
+    # ── Global disclaimer footer (visible on every tab) ──────────────────
+    html.Div(
+        html.Small([
+            html.B("Disclaimer: "),
+            "Educational / research tool — not investment advice.",
+        ], className="text-muted",
+           style={"fontSize": "0.74rem"}),
+        className="text-center py-2",
+        style={"borderTop": f"1px solid {BORDER}",
+               "backgroundColor": "#f8f9fa"},
     ),
 ], style={"backgroundColor": BG_PAGE, "minHeight": "100vh"})
 
