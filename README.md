@@ -10,7 +10,7 @@ The dashboard features six tabs, allowing the analysis of systemic risk measurs 
 - **Start** — Accessible entry point before engaging with the analytical tabs.
 - **Overview** — Analytical entry point of the dashboard, presenting a real-time snapshot of systemic risk conditions across the full bank sample.
 - **Time Series** — Dynamic of view of systemic risk measures over the full sample period.
-- **SRISK** — Dedicated environment for capital shortfall analysis under customisable stress scenar-ios.
+- **SRISK** — Dedicated environment for capital shortfall analysis under customisable stress scenarios.
 - **Market and Correlation** — Multi-panel view of price performance, dynamic correlations, and pairwise return co-movement across the full bank sample.
 - **Methodology** — Built-in reference guide, consolidating all technical documentation in a single accessible location
 
